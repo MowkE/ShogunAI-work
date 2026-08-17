@@ -2,6 +2,8 @@
 
 *Codename "Recall" (placeholder). A local-first knowledge layer for coding agents that supersedes GodHands on every axis that matters. Prepared 2026-08-16. Companion to `GODHANDS_ANALYSIS.md`.*
 
+> **Build status (2026-08-16, v0.3 in `recall/`):** ① sources — Claude Code, Codex, Cursor, git, GitHub PRs, auto-memory ✅ (Gemini/Aider ⏳ no local data) · ② surfaces — hooks via compiled shim ≈40 ms, MCP, per-path rules, guard ✅ · ③ privacy — local-first, redaction, `recall forget` ✅ · ④ truth maintenance — provenance/decay/verification ✅ (contradiction merge ⏳) · ⑤ retrieval — local transformer + hybrid, calibrated by eval: hit@3 59% vs BM25 27% ✅ · ⑥ feedback loop ✅ (learned reranker ⏳) · ⑦ latency ✅ · ⑧ team layer — alpha server + promote/push/pull + repo identity ✅ (Postgres/RLS/UI ⏳) · ⑨ doc projection — `recall drift` + CI workflow + ADR export ✅ (drift precision labelling ⏳) · ⑩ distribution — Apache-2.0, `recall init`, dashboard ✅. Details: `recall/HANDOFF.md`.
+
 **Assumptions stated up front:** 2–4 engineers, 12 weeks to a public v1, TypeScript-first, Anthropic models by default (BYO-model supported), open-core license. Nothing here copies GodHands's code — their npm package is UNLICENSED and their extraction runs server-side anyway. We copy the *problem*, not the implementation.
 
 ---

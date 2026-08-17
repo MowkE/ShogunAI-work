@@ -60,9 +60,18 @@ function prov(seg: Segment, model: string, ids: string[]): Provenance {
   return { source: (['claude-code', 'codex', 'cursor', 'gemini', 'aider', 'opencode'].includes(seg.agent) ? seg.agent : 'agent') as Provenance['source'], sessionId: seg.sessionId, segmentId: seg.id, messageIds: ids.slice(0, 8), observedAt: seg.startedAt, extractor: 'llm', author: model } as Provenance;
 }
 
+export function buildExtractionRequest(seg: Segment) {
+  return { system: SYSTEM_PROMPT, user: renderSegment(seg), schema: EXTRACTION_SCHEMA as unknown as Record<string, unknown> };
+}
+
 export async function llmExtract(seg: Segment, model: JsonModel): Promise<{ drafts: DraftEntity[]; costUsd: number; outcome: Segment['outcome'] }> {
-  const rendered = renderSegment(seg);
-  const { data, costUsd, model: modelName } = await model.json({ system: SYSTEM_PROMPT, user: rendered, schema: EXTRACTION_SCHEMA as unknown as Record<string, unknown> });
+  const { data, costUsd, model: modelName } = await model.json(buildExtractionRequest(seg));
+  const { drafts, outcome } = mapExtraction(seg, data, modelName);
+  return { drafts, costUsd, outcome };
+}
+
+/** Map a model's structured output onto entity drafts (shared by live and batch paths). */
+export function mapExtraction(seg: Segment, data: unknown, modelName: string): { drafts: DraftEntity[]; outcome: Segment['outcome'] } {
   const d = (data ?? {}) as Record<string, unknown>;
   const drafts: DraftEntity[] = [];
   const P = seg.projectPath;
@@ -101,5 +110,5 @@ export async function llmExtract(seg: Segment, model: JsonModel): Promise<{ draf
       title: dc.title, context: dc.context ?? '', choice: dc.choice, alternatives: arr<string>(dc.alternatives), consequences: arr<string>(dc.consequences), status: 'active', confidence: 0.6, paths: seg.filesMutated.slice(0, 6) });
   }
   const outcome = (['accepted', 'abandoned', 'partial', 'unknown'] as const).includes(d.outcome as never) ? (d.outcome as Segment['outcome']) : seg.outcome;
-  return { drafts, costUsd, outcome };
+  return { drafts, outcome };
 }

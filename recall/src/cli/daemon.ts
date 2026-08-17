@@ -17,6 +17,7 @@ import { reindex } from '../core/merge.js';
 import { ingest } from '../extract/ingest.js';
 import { claudeProjectsDir } from '../collectors/claude-code.js';
 import { handleHook, type HookInput } from './hook-logic.js';
+import { renderDashboard } from './dashboard.js';
 import { codexDirs } from '../collectors/codex.js';
 import { cursorGlobalDb } from '../collectors/cursor.js';
 
@@ -103,6 +104,7 @@ async function serve() {
   const server = createServer(async (req, res) => {
     const t = Date.now();
     try {
+      if (req.method === 'GET' && (req.url === '/' || req.url === '/dashboard')) { const html = renderDashboard(store, { embedder: embedder.name, uptimeS: Math.round(process.uptime()), pid: process.pid }); res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(html); }
       if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true, pid: process.pid, embedder: embedder.name, uptimeS: Math.round(process.uptime()), entities: store.countByType() });
       if (req.method !== 'POST') return json(res, 405, { error: 'POST only' });
       const body = await readBody(req);

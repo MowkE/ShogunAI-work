@@ -1,4 +1,4 @@
-# Recall — handoff notes (2026-08-16)
+# Recall — handoff notes (2026-08-16, v0.3)
 
 For whoever picks this up next (e.g. to test with a real Anthropic API key).
 
@@ -36,9 +36,9 @@ Look at `node dist/cli/index.js search "onshape callouts recalibrate" --cwd ~/st
 | ~~Cursor/Codex collectors~~ done and verified on real local data (21 Cursor composers, 7 Codex rollouts); Gemini CLI/Aider/OpenCode remain | `src/collectors/` | git + GitHub PR collectors done; PR→rule path fixture-tested |
 | ~~Hashing embeddings~~ done: local `bge-small` via transformers.js, warm in the daemon; weights retuned (hit@3 40% → 52%) | `src/core/embed.ts` | — |
 | ~~No warm daemon~~ done; ~~hook latency~~ done: compiled bun shim ≈40 ms via daemon `/hook` | `src/cli/daemon.ts`, `hookbin/` | — |
-| Guard never denies yet | `src/cli/hook.ts` `guard` | needs rules with `enforcement: 'block'` (team/promoted rules) |
-| Batches API for backfill | `src/extract/model.ts` | Page 6 |
-| Team server alpha done (SQLite + bearer keys; promote/push/pull; repo-id matching); review UI, Postgres/RLS, GitHub App doc-projection not started | `src/team/` | Pages 9–10 |
+| Guard: `recall rule <id> warn|block` makes it act; auto-set for safety rules is next | `src/cli/hook-logic.ts` | — |
+| ~~Batches API~~ plumbing done (`recall ingest --batch`, `recall batch apply`), untested without a key | `src/extract/batch.ts` | Page 6 |
+| Team server alpha done (SQLite + bearer keys; promote/push/pull; repo-id matching); review UI + Postgres/RLS not started. Doc projection done as `recall drift` + `templates/github-drift.yml` (Actions, no App needed); ADR export done | `src/team/`, `src/drift/` | Pages 9–10 |
 | Correction detector is regex-based | `src/extract/segment.ts` `CORRECTION_RE` | LLM pass generalizes; a dedicated classifier is planned |
 
 ## Decisions made tonight (and why)
@@ -47,3 +47,7 @@ Look at `node dist/cli/index.js search "onshape callouts recalibrate" --cwd ~/st
 - `node:sqlite` instead of better-sqlite3/sqlite-vec — no native builds on Node 25, FTS5 present; vector search is in-process cosine over stored Float32 blobs (fine at this scale).
 - Hooks are project-scoped by request; the DB is per-user (`~/.recall/recall.db`) and cross-project retrieval is allowed for pointers/procedures/subjects at a penalty, never for rules/decisions unless personal-scope.
 - Ranking weights were set from the replay eval, not by hand: `W_LEX 0.65 / W_VEC 0.25 / MIN 0.12`. The sweep table is in the session log; hit@3 vs precision trades off cleanly with `MIN_SCORE`.
+
+## Status at v0.3 (what "finished" means for this cut)
+
+Every locally-verifiable item in the 12-week plan is built and tested (13/13 tests). Not built, and why: **Postgres/RLS team server + review UI** (needs a deployment target and real teammates), **Gemini CLI / Aider / OpenCode collectors** (no local data to verify against), **live API-key paths** — Anthropic SDK adapter, Batches — implemented per SDK docs but not exercised. First thing to do with a key: `export ANTHROPIC_API_KEY=…; node dist/cli/index.js ingest --llm --llm-segments 5 --max-cost 1`, then `recall ingest --batch` for the full backfill.

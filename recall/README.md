@@ -2,7 +2,7 @@
 
 **Local-first knowledge layer for coding agents.** Recall learns from the agent sessions you already have on disk, turns them into verified, provenance-tracked knowledge (where to look, rules from your corrections, procedures that worked, decisions in force), and injects the right slice back into future sessions — automatically, through Claude Code hooks, an MCP server, and compiled rules files.
 
-Status: **v0.1 vertical slice** (built 2026-08-16). Works end-to-end on real Claude Code transcripts. See `../RECALL_IMPLEMENTATION_PLAN.md` for the full 12-week plan and `../GODHANDS_ANALYSIS.md` for the competitive analysis it grew out of.
+Status: **v0.3** (built 2026-08-16). Works end-to-end on real Claude Code, Codex and Cursor sessions plus git/PR history; ships hooks, MCP, compiled rules, a warm daemon, doc-drift checks, ADR export, team sync and a local dashboard. See `../RECALL_IMPLEMENTATION_PLAN.md` for the full 12-week plan and `../GODHANDS_ANALYSIS.md` for the competitive analysis it grew out of.
 
 ## What it does today
 
@@ -25,6 +25,25 @@ Status: **v0.1 vertical slice** (built 2026-08-16). Works end-to-end on real Cla
 - **Compiled hook shim** (`hookbin/recall-hook`, built with `bun build --compile` when bun is present): forwards hook stdin to the daemon — **≈40 ms end-to-end**; execs the Node hook (and restarts the daemon) if the daemon is down.
 - **Team sync (alpha):** `recall team-server` (SQLite-backed, bearer-key auth) + `recall team login|suggest|promote|push|pull`. Entities carry a machine-independent `repo` id (`github.com/owner/name`), so a teammate on a different path retrieves the same repo's knowledge. Restricted-sensitivity entities never leave the machine.
 - **Eval**: `npm run eval` replays historical segments (leakage-controlled) and reports hit@1/3, precision, and a BM25-only baseline. **Measured 2026-08-16 on 622 real sessions + git history of 10 repos:** hit@1 35%, hit@3 52%, precision 0.31, vs. BM25-only hit@3 18%; transformer embeddings lifted hit@3 from 40% (lexical-only) to 52%. Hook end-to-end ≈ 340 ms (Node start dominates; retrieval ≈ 100 ms via daemon).
+
+## Command reference
+
+| Command | What it does |
+|---|---|
+| `recall init [--user] [--no-llm]` | Build the KB from every agent's transcripts + git history, install hooks/MCP (project scope by default), compile rules, start the daemon |
+| `recall ingest [--llm] [--batch] [--collectors …]` | Incremental ingest; `--llm` refines with a model live; `--batch` submits a Message Batch (API key, −50%) |
+| `recall batch list\|status\|apply <id>` | Manage batch backfills |
+| `recall ingest-repo [paths…]` · `recall ingest-memory` | Git commits + GitHub PR reviews (via `gh`) · Claude Code auto-memory files |
+| `recall search "…" [--files …] [--cwd …]` | Query as an agent would (via the daemon when running) |
+| `recall explain <id>` · `recall why` · `recall feedback <id> useful\|not_useful\|wrong` | Provenance · last injection · feedback |
+| `recall compile` · `recall rule <id> inform\|warn\|block` | Write `.claude/rules` / `.cursor/rules` / `AGENTS.md` · make the PreToolUse guard act on a rule |
+| `recall drift [--base ref\|--staged\|--pr N] [--llm] [--comment]` | Doc-drift report: stale paths/symbols (git-history-aware), undocumented exports, sections to review, LLM consistency check; post as PR comment |
+| `recall adr` | Draft `docs/adr/NNNN-*.md` from Decision entities |
+| `recall daemon start\|stop\|status\|run` · `recall dashboard` · `recall reindex` | Warm daemon · local dashboard at `127.0.0.1:47821` · re-embed |
+| `recall team-server` · `recall team login\|suggest\|promote\|push\|pull\|status` | Team KB (alpha) |
+| `recall forget --entity\|--session\|--project\|--all` · `recall uninstall` · `recall doctor` · `recall stats` · `recall inspect <session>` | Privacy · removal · environment · numbers · debugging |
+
+CI: copy `templates/github-drift.yml` to `.github/workflows/` to get a doc-drift comment on every PR (LLM check when `ANTHROPIC_API_KEY` is set).
 
 ## Quick start
 

@@ -10,6 +10,7 @@ import { retrieve, formatContext } from '../core/retrieve.js';
 import { compileRules } from '../core/compile.js';
 import { ingest, ingestRepo, ingestMemory, forget } from '../extract/ingest.js';
 import { pickModel, hasAnthropicCreds } from '../extract/model.js';
+import { collectSegments, submitBatch, listBatches, batchStatus, applyBatch } from '../extract/batch.js';
 import * as claudeCode from '../collectors/claude-code.js';
 import { discoverAll } from '../collectors/index.js';
 import { segmentsOf } from '../extract/ingest.js';
@@ -72,8 +73,16 @@ program.command('ingest')
   .option('--max-cost <usd>', 'LLM spend cap', '5')
   .option('--force', 're-process even if already ingested')
   .option('--collectors <ids...>', 'restrict to collectors: claude-code codex cursor')
+  .option('--batch', 'submit LLM refinement as one Message Batch (needs an API key; -50% cost); apply later with `recall batch apply <id>`')
+  .option('--max-segments <n>', 'with --batch: cap segments submitted', '500')
   .action(async (o) => {
     const store = new Store();
+    if (o.batch) {
+      if (!hasAnthropicCreds()) { console.error('--batch needs ANTHROPIC_API_KEY (or `ant auth login`)'); process.exit(1); }
+      const segs = collectSegments(store, { since: o.since ? Number(o.since) : undefined, project: o.project, max: Number(o.maxSegments) });
+      if (!segs.length) { console.log('nothing to submit'); store.close(); return; }
+      const r = await submitBatch(store, segs); console.log(JSON.stringify({ batchId: r.id, segments: r.count, next: `recall batch apply ${r.id}` })); store.close(); return;
+    }
     const model = o.llm ? await pickModel() : null;
     console.error(`model: ${model?.name ?? 'none'}${model && !hasAnthropicCreds() ? ' (claude -p; each call carries Claude Code overhead ~$0.10)' : ''}`);
     const r = await ingest(store, { since: o.since ? Number(o.since) : undefined, project: o.project, session: o.session, max: o.max ? Number(o.max) : undefined, llm: model, maxLlmSegments: Number(o.llmSegments), maxCostUsd: Number(o.maxCost), force: !!o.force, collectors: o.collectors, onProgress: (m) => console.error('  ' + m) });
@@ -118,6 +127,11 @@ program.command('rule <id> <enforcement>').description('Set a rule\'s enforcemen
   e.enforcement = enforcement as 'inform' | 'warn' | 'block'; if (enforcement !== 'inform') { e.validity.confidence = Math.max(e.validity.confidence, 0.85); e.validity.evidence = Math.max(e.validity.evidence, 2); }
   store.upsertEntity(e); console.log(`${e.id} → ${enforcement}`); store.close();
 });
+
+const batch = program.command('batch').description('Message Batches backfill: list | status <id> | apply <id>');
+batch.command('list').action(() => console.log(JSON.stringify(listBatches(), null, 2)));
+batch.command('status <id>').action(async (id: string) => console.log(JSON.stringify(await batchStatus(id), null, 2)));
+batch.command('apply <id>').action(async (id: string) => { const store = new Store(); try { console.log(JSON.stringify(await applyBatch(store, id, undefined, (m) => console.error('  ' + m)))); } catch (e) { console.error((e as Error).message); process.exit(1); } store.close(); });
 
 program.command('search <query...>')
   .description('Query the KB as an agent would')
@@ -223,6 +237,8 @@ program.command('daemon [action]')
     if (!pid) { console.log('not running'); return; }
     try { const h = await new Promise<string>((res, rej) => { const req = httpGet({ host: '127.0.0.1', port: DAEMON_PORT, path: '/health' }, (r) => { let s = ''; r.on('data', (d) => (s += d)); r.on('end', () => res(s)); }); req.on('error', rej); }); console.log(h); } catch { console.log(`pid ${pid} alive but not answering on ${DAEMON_PORT}`); }
   });
+
+program.command('dashboard').description('Open the local dashboard (served by the daemon)').action(async () => { ensureDaemon(); await new Promise((r) => setTimeout(r, daemonRunning() ? 0 : 3000)); const url = `http://127.0.0.1:${DAEMON_PORT}/`; try { execFileSync(process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open', [url], { stdio: 'ignore' }); } catch { /* ignore */ } console.log(url); });
 
 program.command('reindex').description('Re-embed all entities with the current embedder (RECALL_EMBEDDER=transformer|hashing)').action(async () => {
   try { const r = await daemonCall<{ reindexed: number; embedder: string }>('/reindex', {}, 600_000); console.log(JSON.stringify(r)); return; } catch { /* fall through */ }

@@ -1,0 +1,31 @@
+# Recall doc-drift check on every pull request — no GitHub App needed (uses the built-in GITHUB_TOKEN via gh).
+# Copy to .github/workflows/recall-drift.yml. Add ANTHROPIC_API_KEY as a repo secret to enable the LLM consistency check.
+name: recall-drift
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install Recall
+        run: |
+          git clone --depth 1 https://github.com/YOUR_ORG/recall /tmp/recall   # or: npm i -g recall once published
+          cd /tmp/recall/recall && npm ci --silent && npm run build --silent
+      - name: Doc-drift report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RECALL_MODEL_ADAPTER: ${{ secrets.ANTHROPIC_API_KEY && 'anthropic' || 'none' }}
+        run: |
+          FLAGS=""; [ -n "$ANTHROPIC_API_KEY" ] && FLAGS="--llm --max-llm 8"
+          node --no-warnings /tmp/recall/recall/dist/cli/index.js drift --repo "$PWD" --pr ${{ github.event.pull_request.number }} $FLAGS --comment --out drift-report.md
+      - uses: actions/upload-artifact@v4
+        with: { name: recall-drift-report, path: drift-report.md }
