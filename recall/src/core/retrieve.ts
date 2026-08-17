@@ -11,12 +11,21 @@ export interface Query {
   sessionId?: string;
   types?: EntityType[];
   topK?: Partial<Record<EntityType, number>>;
+  /** Minimum confidence per type (defaults: rules/decisions 0.5 so raw heuristic corrections are not injected as rules). */
+  minConfidence?: Partial<Record<EntityType, number>>;
+  /** Only entities of this project (or global scope). Default: cross-project pointers/subjects/procedures allowed at a penalty; rules/decisions never cross projects unless personal-scope. */
+  projectOnly?: boolean;
 }
+const DEFAULT_MIN_CONF: Partial<Record<EntityType, number>> = { rule: 0.5, decision: 0.5 };
 
 export interface Hit { entity: Entity; score: number; caveats: string[]; verified: boolean | null }
 
 const DEFAULT_TOPK: Record<EntityType, number> = { pointer: 3, procedure: 2, rule: 5, decision: 2, subject: 3 };
-const MIN_SCORE: Record<EntityType, number> = { pointer: 0.22, procedure: 0.22, rule: 0.18, decision: 0.2, subject: 0.24 };
+// Tunable via env for calibration runs (see eval/replay). Defaults were set by replay eval on 2026-08-16.
+const num = (k: string, d: number) => (process.env[k] !== undefined ? Number(process.env[k]) : d);
+const W_VEC = num('RECALL_W_VEC', 0.25), W_LEX = num('RECALL_W_LEX', 0.65), W_FILE = num('RECALL_W_FILE', 0.25);
+const MIN_BASE = num('RECALL_MIN_SCORE', 0.12);
+const MIN_SCORE: Record<EntityType, number> = { pointer: MIN_BASE, procedure: MIN_BASE, rule: MIN_BASE * 0.85, decision: MIN_BASE * 0.9, subject: MIN_BASE * 1.1 };
 
 function daysBetween(a: string, b: Date) { return Math.max(0, (b.getTime() - new Date(a).getTime()) / 86400000); }
 
@@ -54,17 +63,21 @@ export function retrieve(store: Store, q: Query, embedder: Embedder = defaultEmb
   for (const e of cand.values()) {
     if (!types.includes(e.type)) continue;
     if (e.sensitivity === 'restricted' && e.projectPath !== project) continue;
-    const sameProject = e.projectPath === '' || e.projectPath === project || (project && e.projectPath && (project.startsWith(e.projectPath) || e.projectPath.startsWith(project)));
+    const minC = q.minConfidence?.[e.type] ?? DEFAULT_MIN_CONF[e.type] ?? 0;
+    if (e.validity.confidence < minC) continue;
+    const isGlobal = e.projectPath === '' || e.scope === 'personal';
+    const sameProject = isGlobal || e.projectPath === project || (!!project && !!e.projectPath && (project.startsWith(e.projectPath + '/') || e.projectPath.startsWith(project + '/')));
+    if (!sameProject && (q.projectOnly || e.type === 'rule' || e.type === 'decision')) continue;
     const vec = e.embedding ? Math.max(0, cosine(qEmb, e.embedding)) : 0;
     const lex = bmNorm(e.id);
-    const fileBoost = fileHits.has(e.id) ? 0.25 : 0;
+    const fileBoost = fileHits.has(e.id) ? W_FILE : 0;
     const age = daysBetween(e.validity.lastConfirmed, now);
     const decay = Math.pow(0.5, age / e.validity.decayHalfLifeDays);
     const evidence = Math.min(0.15, 0.03 * Math.log2(1 + e.validity.evidence));
     const conf = e.validity.confidence;
     const use = e.validity.usefulness * 0.15;
-    let score = 0.5 * vec + 0.35 * lex + fileBoost + evidence + use;
-    score = score * (0.5 + 0.5 * decay) * (0.6 + 0.4 * conf) * (sameProject ? 1 : 0.55);
+    let score = W_VEC * vec + W_LEX * lex + fileBoost + evidence + use;
+    score = score * (0.75 + 0.25 * decay) * (0.8 + 0.2 * conf) * (sameProject ? 1 : 0.45);
     if (score < MIN_SCORE[e.type]) continue;
     const v = verifyEntity(e, q.cwd);
     if (v.ok === false) score *= 0.5;

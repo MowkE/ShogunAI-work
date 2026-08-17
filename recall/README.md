@@ -19,7 +19,7 @@ Status: **v0.1 vertical slice** (built 2026-08-16). Works end-to-end on real Cla
 - **Two model adapters** behind one interface: `claude -p` (uses your Claude Code login; default when no key) and the Anthropic SDK with structured outputs (`ANTHROPIC_API_KEY` or `ant auth login`; default model `claude-opus-5`).
 - **Truth maintenance**: every entity has provenance, evidence count, confidence, decay half-life and — for path-anchored entities — a read-time check against the working tree; stale pointers are caveated and down-ranked.
 - **Feedback loop**: `used`/`useful`/`wrong` signals move a per-entity usefulness score that feeds ranking and compile selection.
-- **Eval**: `npm run eval` replays historical segments (leakage-controlled) and reports hit@1/3, precision, and a BM25-only baseline.
+- **Eval**: `npm run eval` replays historical segments (leakage-controlled) and reports hit@1/3, precision, and a BM25-only baseline. **Measured 2026-08-16 on 622 real sessions (939 segments, mostly heuristic-extracted, 5 LLM-refined):** hit@1 32.0%, hit@3 41.6%, precision 0.34, vs. BM25-only hit@3 18.8%; ~40 ms per query. Hook end-to-end (Node start + retrieve) ≈ 250 ms.
 
 ## Quick start
 

@@ -71,7 +71,7 @@ async function main() {
       case 'session-start': {
         // project brief: top rules + decisions for this cwd (no LLM)
         const cwd = input.cwd; if (!cwd) return;
-        const hits = retrieve(store, { intent: 'project conventions rules decisions overview', cwd, types: ['rule', 'decision'], topK: { rule: 6, decision: 3 } });
+        const hits = retrieve(store, { intent: 'project conventions rules decisions overview', cwd, types: ['rule', 'decision'], topK: { rule: 6, decision: 3 }, projectOnly: true, minConfidence: { rule: 0.5, decision: 0.5 } });
         if (!hits.length) return;
         const ctx = formatContext(hits, { maxChars: 2200 }).replace('<recall-context ', '<recall-context kind="project-brief" ');
         store.recordInjection({ sessionId: input.session_id, surface: 'hook:session-start', query: 'project-brief', entityIds: hits.map((h) => h.entity.id), cwd, latencyMs: Date.now() - t0 });

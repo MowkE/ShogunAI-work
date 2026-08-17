@@ -80,7 +80,7 @@ export function segmentSession(sessionId: string, projectPath: string, events: C
 }
 
 /** Compact textual rendering of a segment for the LLM extractor (already-redacted events expected). */
-export function renderSegment(seg: Segment, maxChars = 24000): string {
+export function renderSegment(seg: Segment, maxChars = 14000): string {
   const lines: string[] = [];
   lines.push(`# Session ${seg.sessionId.slice(0, 8)} · project ${seg.projectPath} · agent ${seg.agent} · started ${seg.startedAt}`);
   for (const e of seg.events) {
