@@ -4,12 +4,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { Store } from '../core/store.js';
-import { retrieve, formatContext } from '../core/retrieve.js';
+import { retrieveAsync, formatContext } from '../core/retrieve.js';
+import { pickEmbedder } from '../core/embed.js';
 import { mergeDrafts } from '../core/merge.js';
 import type { DraftEntity } from '../core/schema.js';
 
 const server = new McpServer({ name: 'recall', version: '0.1.0' });
 const store = new Store();
+const embedder = pickEmbedder();
 const ENTITY_TYPES = ['pointer', 'procedure', 'rule', 'decision', 'subject'] as const;
 
 server.registerTool('recall_search', {
@@ -23,7 +25,7 @@ server.registerTool('recall_search', {
   },
 }, async ({ query, files, cwd, types }) => {
   const t0 = Date.now();
-  const hits = retrieve(store, { intent: query, cwd: cwd ?? process.cwd(), files, types });
+  const hits = await retrieveAsync(store, { intent: query, cwd: cwd ?? process.cwd(), files, types }, embedder);
   store.recordInjection({ surface: 'mcp', query, entityIds: hits.map((h) => h.entity.id), cwd: cwd ?? process.cwd(), latencyMs: Date.now() - t0 });
   const text = hits.length ? formatContext(hits, { maxChars: 6000 }) : 'No relevant knowledge found for this query. Try rephrasing with the component name plus the outcome you need, or narrow the scope.';
   return { content: [{ type: 'text', text }] };
@@ -56,7 +58,7 @@ server.registerTool('recall_remember', {
   else if (kind === 'decision') { const [title, choice, ...rest] = text.split(' — '); draft = { type: 'decision', scope: 'project', sensitivity: 'internal', projectPath: project, provenance: [prov], title: title ?? text, context: rest.join(' — '), choice: choice ?? '', alternatives: [], consequences: [], status: 'active', confidence: 0.7, paths: paths ?? [] }; }
   else { const [outcome, ...targets] = text.split(' — '); const ts = targets.join(' — ').split(';').map((s) => s.trim()).filter(Boolean).map((s, i) => { const [p, ...r] = s.split(':'); return { path: p.trim(), reason: r.join(':').trim() || 'relevant', priority: 5 - i }; });
     draft = { type: 'pointer', scope: 'project', sensitivity: 'internal', projectPath: project, provenance: [prov], outcomeClass: outcome, signals: [], targets: ts, decoys: [], confidence: 0.65, paths: ts.map((t) => t.path) }; }
-  const r = mergeDrafts(store, [draft]);
+  const r = await mergeDrafts(store, [draft], embedder);
   return { content: [{ type: 'text', text: `Remembered (${r.inserted ? 'new' : 'merged'}) → id ${r.ids[0]}` }] };
 });
 

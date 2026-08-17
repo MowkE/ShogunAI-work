@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import type { Entity, EntityType } from './schema.js';
 import { Store } from './store.js';
-import { cosine, defaultEmbedder, type Embedder } from './embed.js';
+import { cosine, hashingEmbedder, type Embedder } from './embed.js';
 
 export interface Query {
   intent: string;
@@ -23,8 +23,8 @@ export interface Hit { entity: Entity; score: number; caveats: string[]; verifie
 const DEFAULT_TOPK: Record<EntityType, number> = { pointer: 3, procedure: 2, rule: 5, decision: 2, subject: 3 };
 // Tunable via env for calibration runs (see eval/replay). Defaults were set by replay eval on 2026-08-16.
 const num = (k: string, d: number) => (process.env[k] !== undefined ? Number(process.env[k]) : d);
-const W_VEC = num('RECALL_W_VEC', 0.25), W_LEX = num('RECALL_W_LEX', 0.65), W_FILE = num('RECALL_W_FILE', 0.25);
-const MIN_BASE = num('RECALL_MIN_SCORE', 0.12);
+const W_VEC = num('RECALL_W_VEC', 0.45), W_LEX = num('RECALL_W_LEX', 0.45), W_FILE = num('RECALL_W_FILE', 0.25);
+const MIN_BASE = num('RECALL_MIN_SCORE', 0.18);
 const MIN_SCORE: Record<EntityType, number> = { pointer: MIN_BASE, procedure: MIN_BASE, rule: MIN_BASE * 0.85, decision: MIN_BASE * 0.9, subject: MIN_BASE * 1.1 };
 
 function daysBetween(a: string, b: Date) { return Math.max(0, (b.getTime() - new Date(a).getTime()) / 86400000); }
@@ -40,12 +40,24 @@ export function verifyEntity(e: Entity, cwd?: string): { ok: boolean | null; cav
   return { ok: false, caveats };
 }
 
-export function retrieve(store: Store, q: Query, embedder: Embedder = defaultEmbedder): Hit[] {
+export function queryIntent(q: Query): string {
+  return [q.intent, ...(q.files ?? []).map((f) => f.split('/').pop() ?? '')].join(' ');
+}
+
+/** Async retrieval: embeds the query with the given embedder (transformer in the daemon, hashing as fallback). */
+export async function retrieveAsync(store: Store, q: Query, embedder: Embedder): Promise<Hit[]> {
+  const qEmb = await embedder.embed(queryIntent(q));
+  return retrieve(store, q, { qEmb, embedderName: embedder.name });
+}
+
+/** Sync retrieval with a precomputed query embedding (or hashing fallback). Vectors from a different embedder score 0 → lexical-only. */
+export function retrieve(store: Store, q: Query, opts: { qEmb?: number[]; embedderName?: string } = {}): Hit[] {
   const now = new Date();
   const project = q.cwd ?? '';
   const types = q.types ?? (Object.keys(DEFAULT_TOPK) as EntityType[]);
-  const intent = [q.intent, ...(q.files ?? []).map((f) => f.split('/').pop() ?? '')].join(' ');
-  const qEmb = embedder.embed(intent);
+  const intent = queryIntent(q);
+  const qEmb = opts.qEmb ?? hashingEmbedder.embedSync(intent);
+  const embName = opts.embedderName ?? hashingEmbedder.name;
   const fileHits = store.entitiesForPaths(q.files ?? []);
 
   // Candidate pool: FTS (per type) ∪ file-index hits ∪ project entities (small KBs) — then score all
@@ -68,7 +80,7 @@ export function retrieve(store: Store, q: Query, embedder: Embedder = defaultEmb
     const isGlobal = e.projectPath === '' || e.scope === 'personal';
     const sameProject = isGlobal || e.projectPath === project || (!!project && !!e.projectPath && (project.startsWith(e.projectPath + '/') || e.projectPath.startsWith(project + '/')));
     if (!sameProject && (q.projectOnly || e.type === 'rule' || e.type === 'decision')) continue;
-    const vec = e.embedding ? Math.max(0, cosine(qEmb, e.embedding)) : 0;
+    const vec = e.embedding && (e.embeddingModel ?? 'hashing-v1') === embName ? Math.max(0, cosine(qEmb, e.embedding)) : 0;
     const lex = bmNorm(e.id);
     const fileBoost = fileHits.has(e.id) ? W_FILE : 0;
     const age = daysBetween(e.validity.lastConfirmed, now);

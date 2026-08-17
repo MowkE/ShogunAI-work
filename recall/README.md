@@ -19,7 +19,9 @@ Status: **v0.1 vertical slice** (built 2026-08-16). Works end-to-end on real Cla
 - **Two model adapters** behind one interface: `claude -p` (uses your Claude Code login; default when no key) and the Anthropic SDK with structured outputs (`ANTHROPIC_API_KEY` or `ant auth login`; default model `claude-opus-5`).
 - **Truth maintenance**: every entity has provenance, evidence count, confidence, decay half-life and — for path-anchored entities — a read-time check against the working tree; stale pointers are caveated and down-ranked.
 - **Feedback loop**: `used`/`useful`/`wrong` signals move a per-entity usefulness score that feeds ranking and compile selection.
-- **Eval**: `npm run eval` replays historical segments (leakage-controlled) and reports hit@1/3, precision, and a BM25-only baseline. **Measured 2026-08-16 on 622 real sessions (939 segments, mostly heuristic-extracted, 5 LLM-refined):** hit@1 32.0%, hit@3 41.6%, precision 0.34, vs. BM25-only hit@3 18.8%; ~40 ms per query. Hook end-to-end (Node start + retrieve) ≈ 250 ms.
+- **Warm daemon** (`recall daemon start`): keeps SQLite + a local transformer embedder (`Xenova/bge-small-en-v1.5`, 384-d, ~3 ms/embed) hot on `127.0.0.1:47821`, watches `~/.claude/projects` and ingests new sessions ~15 s after they stop writing. Hooks call it (≈100 ms retrieval) and fall back to in-process lexical retrieval if it is down (auto-restarting it).
+- **Git + GitHub PR collectors** (`recall ingest-repo`): commit history → pointers/decision candidates/co-change subjects; PR review comments (via your `gh` auth) → correction-shaped **rules** scoped to the commented file; PRs → pointers.
+- **Eval**: `npm run eval` replays historical segments (leakage-controlled) and reports hit@1/3, precision, and a BM25-only baseline. **Measured 2026-08-16 on 622 real sessions + git history of 10 repos:** hit@1 35%, hit@3 52%, precision 0.31, vs. BM25-only hit@3 18%; transformer embeddings lifted hit@3 from 40% (lexical-only) to 52%. Hook end-to-end ≈ 340 ms (Node start dominates; retrieval ≈ 100 ms via daemon).
 
 ## Quick start
 
@@ -47,9 +49,9 @@ Model selection: `RECALL_MODEL_ADAPTER=anthropic|claude-cli|none` (default `auto
 
 ```
 src/core        schema · store (SQLite/FTS5) · embed (hashing vectors; swappable) · merge · retrieve · redact · compile
-src/collectors  claude-code (transcript discovery + JSONL → canonical events)
+src/collectors  claude-code (transcripts) · git (commit history) · github (PRs + review comments via gh)
 src/extract     segment · heuristic · llm (structured-output extraction) · model (adapters) · ingest (orchestrator)
-src/cli         index (recall) · hook (recall-hook)
+src/cli         index (recall) · hook (recall-hook) · daemon (warm store + embedder + watcher)
 src/mcp         server (recall-mcp)
 src/eval        replay
 src/test        unit tests (node:test)
@@ -57,10 +59,10 @@ src/test        unit tests (node:test)
 
 ## Design notes / known limits (v0.1)
 
-- Only the Claude Code collector is implemented; Cursor/Codex/Aider/git/PR collectors are next (see plan, page 5).
-- Embeddings are feature-hashed (lexical) by default; a local transformer embedder plugs into `Embedder` without touching callers.
+- Collectors: Claude Code transcripts, git, GitHub PRs. Cursor/Codex/Aider transcript collectors are next (see plan, page 5).
+- Embeddings: local transformer by default (`RECALL_EMBEDDER=hashing` for the zero-dependency fallback); `recall reindex` after switching.
 - Heuristic entities are deliberately conservative (pointers/subjects from edits, rules from detected corrections, procedures from successful command runs); the LLM pass generalizes rules, adds decisions, root causes and decoys.
 - The `PreToolUse` guard only denies for rules with `enforcement: 'block'`, confidence ≥ 0.8 and evidence ≥ 2 — none are produced automatically yet; the surface exists so promoted/team rules can use it.
-- No daemon yet: each hook is a fresh Node process (~200 ms). A warm local daemon is planned for sub-100 ms.
+- Each hook is still a fresh Node process (~200 ms startup) talking to the daemon; a compiled single-binary hook would cut that further.
 
 License: Apache-2.0.

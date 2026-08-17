@@ -22,11 +22,11 @@ test('redaction replaces common secrets and keeps code paths', () => {
 
 test('hashing embedder is deterministic and similarity is sane', () => {
   const e = new HashingEmbedder(256);
-  const a = e.embed('auth middleware rejects valid session token');
-  const b = e.embed('session token rejected by the auth middleware');
-  const c = e.embed('css grid layout for the pricing page');
+  const a = e.embedSync('auth middleware rejects valid session token');
+  const b = e.embedSync('session token rejected by the auth middleware');
+  const c = e.embedSync('css grid layout for the pricing page');
   assert.ok(cosine(a, b) > cosine(a, c));
-  assert.deepEqual(a, e.embed('auth middleware rejects valid session token'));
+  assert.deepEqual(a, e.embedSync('auth middleware rejects valid session token'));
 });
 
 function fakeSession(): CanonicalEvent[] {
@@ -60,13 +60,13 @@ test('segmenter splits at substantive prompts, keeps corrections attached, infer
   assert.equal(segs[1].userPrompt.startsWith('Now add a dark mode'), true);
 });
 
-test('heuristic extraction → merge → retrieve → format, with dedup on re-ingest', () => {
+test('heuristic extraction → merge → retrieve → format, with dedup on re-ingest', async () => {
   const store = new Store(':memory:');
   const segs = segmentSession('sess1', '/repo', fakeSession());
   const drafts: DraftEntity[] = segs.flatMap(heuristicExtract);
-  const r1 = mergeDrafts(store, drafts);
+  const r1 = await mergeDrafts(store, drafts);
   assert.ok(r1.inserted >= 3, 'pointer + subject + rule inserted');
-  const r2 = mergeDrafts(store, segs.flatMap(heuristicExtract));
+  const r2 = await mergeDrafts(store, segs.flatMap(heuristicExtract));
   assert.equal(r2.inserted, 0, 're-ingest merges rather than duplicating');
   const hits = retrieve(store, { intent: 'sessions rejected by auth middleware after refresh', cwd: '/repo' });
   assert.ok(hits.length > 0);

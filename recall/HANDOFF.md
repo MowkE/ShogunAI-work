@@ -8,7 +8,7 @@ For whoever picks this up next (e.g. to test with a real Anthropic API key).
 - End-to-end on real data: 622 Claude Code sessions → 939 task segments → ~575 knowledge entities (pointers with decoys, subjects, procedures, rules from corrections, decisions), 300 secrets redacted before any model saw anything.
 - Injection surfaces, all exercised: Claude Code hooks (`SessionStart` brief, `UserPromptSubmit` context, `PreToolUse` guard, `PostToolUse` feedback, `SessionEnd` real-time ingest), MCP server with 4 tools, `recall compile` for `.claude/rules` / `.cursor/rules` / `AGENTS.md`.
 - Hooks are installed **project-scope** in `godhandsclone/.claude/settings.json` and `godhandsclone/.mcp.json` only. Nothing was written to `~/.claude/settings.json`. `recall uninstall` removes them; `recall init --user` promotes to user scope.
-- Replay eval (leakage-controlled): hit@1 32.0%, hit@3 41.6%, precision 0.34, vs. BM25-only 18.8% hit@3.
+- Replay eval (leakage-controlled): hit@1 35%, hit@3 52%, precision 0.31, vs. BM25-only 18% hit@3 (transformer embeddings + git history; was 41.6% at the first checkpoint).
 
 ## Running with an API key (the path not yet exercised)
 
@@ -33,9 +33,9 @@ Look at `node dist/cli/index.js search "onshape callouts recalibrate" --cwd ~/st
 
 | Gap | Where it lives | Plan ref |
 |---|---|---|
-| Only the Claude Code collector | `src/collectors/` | Page 5 — Cursor, Codex, Aider, git, PR reviews next (PR reviews are the best rule source) |
-| Hashing embeddings (lexical) | `src/core/embed.ts` (`Embedder` interface) | Page 6 — drop in a local ONNX model; retune weights via `RECALL_W_VEC/W_LEX/MIN_SCORE` + `npm run eval` |
-| No warm daemon | hooks spawn Node each time (~250 ms) | Page 3 — daemon for <100 ms |
+| Cursor/Codex/Aider transcript collectors | `src/collectors/` | Page 5 — git + GitHub PR collectors are done (`recall ingest-repo`); PR→rule path is fixture-tested (this machine's repos are solo, so no live review comments yet) |
+| ~~Hashing embeddings~~ done: local `bge-small` via transformers.js, warm in the daemon; weights retuned (hit@3 40% → 52%) | `src/core/embed.ts` | — |
+| ~~No warm daemon~~ done: `recall daemon start|stop|status`, auto-started by hooks, watches transcripts | `src/cli/daemon.ts` | Node startup (~200 ms) is now the floor; a compiled hook binary is the next step |
 | Guard never denies yet | `src/cli/hook.ts` `guard` | needs rules with `enforcement: 'block'` (team/promoted rules) |
 | Batches API for backfill | `src/extract/model.ts` | Page 6 |
 | Team server / sync / review queue / GitHub App | not started | Pages 9–10 |

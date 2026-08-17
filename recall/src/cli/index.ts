@@ -4,14 +4,19 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { get as httpGet } from 'node:http';
 import { Store, defaultDbPath } from '../core/store.js';
 import { retrieve, formatContext } from '../core/retrieve.js';
 import { compileRules } from '../core/compile.js';
-import { ingest } from '../extract/ingest.js';
+import { ingest, ingestRepo } from '../extract/ingest.js';
 import { pickModel, hasAnthropicCreds } from '../extract/model.js';
 import * as claudeCode from '../collectors/claude-code.js';
 import { segmentsOf } from '../extract/ingest.js';
 import { renderSegment } from '../extract/segment.js';
+import { daemonCall, daemonRunning, ensureDaemon, DAEMON_PORT } from './daemon.js';
+import { pickEmbedder } from '../core/embed.js';
+import { reindex } from '../core/merge.js';
+import { retrieveAsync } from '../core/retrieve.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distRoot = resolve(here, '..');
@@ -63,15 +68,39 @@ program.command('ingest')
     store.close();
   });
 
+program.command('ingest-repo [repos...]')
+  .description('Ingest git history (+ GitHub PR review comments via gh) for repos; default: every git repo seen in your sessions')
+  .option('--max-commits <n>', 'commits per repo', '400')
+  .option('--max-prs <n>', 'PRs per repo', '40')
+  .option('--no-prs', 'skip GitHub PRs')
+  .option('--force', 're-process')
+  .action(async (repos: string[], o) => {
+    const store = new Store();
+    if (!repos.length) {
+      const rows = store.db.prepare('SELECT DISTINCT project_path FROM segments').all() as { project_path: string }[];
+      repos = rows.map((r) => r.project_path).filter((p) => existsSync(join(p, '.git')));
+    }
+    const embedder = pickEmbedder();
+    const out = [];
+    for (const r of repos) { const res = await ingestRepo(store, resolve(r), { maxCommits: Number(o.maxCommits), maxPrs: Number(o.maxPrs), prs: o.prs, force: !!o.force, embedder, onProgress: (m) => console.error(`  ${r.split('/').pop()}: ${m}`) }); out.push(res); }
+    console.log(JSON.stringify(out, null, 2)); store.close();
+  });
+
 program.command('search <query...>')
   .description('Query the KB as an agent would')
   .option('-f, --files <paths...>', 'files being worked on (boosts related entities)')
   .option('--cwd <path>', 'project root', process.cwd())
   .option('--json', 'raw JSON output')
-  .action((q: string[], o) => {
+  .action(async (q: string[], o) => {
     const store = new Store();
     const t0 = Date.now();
-    const hits = retrieve(store, { intent: q.join(' '), cwd: resolve(o.cwd), files: o.files });
+    const query = { intent: q.join(' '), cwd: resolve(o.cwd), files: o.files };
+    let hits;
+    try {
+      const r = await daemonCall<{ hits: { entity: never; score: number; caveats: string[]; verified: boolean | null }[] }>('/retrieve', { query, surface: 'cli', record: false }, 3000);
+      hits = r.hits.map((h) => ({ entity: h.entity, score: h.score, caveats: h.caveats, verified: h.verified }));
+      console.error('(via daemon)');
+    } catch { hits = await retrieveAsync(store, query, pickEmbedder()); }
     if (o.json) console.log(JSON.stringify(hits.map((h) => ({ id: h.entity.id, type: h.entity.type, score: +h.score.toFixed(3), verified: h.verified, caveats: h.caveats, entity: h.entity })), null, 2));
     else { console.log(formatContext(hits, { maxChars: 6000 }) || '(no relevant knowledge yet)'); console.error(`\n${hits.length} hits in ${Date.now() - t0}ms`); }
     store.recordInjection({ surface: 'cli', query: q.join(' '), entityIds: hits.map((h) => h.entity.id), cwd: resolve(o.cwd), latencyMs: Date.now() - t0 });
@@ -148,6 +177,24 @@ program.command('doctor').description('Check environment').action(() => {
   const refs = claudeCode.discover();
   console.log(JSON.stringify({ node: process.version, db: defaultDbPath(), dbExists: Store.exists(), transcripts: refs.length, projects: new Set(refs.map((r) => r.projectPath)).size,
     anthropicCreds: hasAnthropicCreds(), claudeCli: which('claude'), modelAdapter: process.env.RECALL_MODEL_ADAPTER ?? 'auto', hookBin: HOOK_BIN }, null, 2));
+});
+
+program.command('daemon [action]')
+  .description('Manage the warm daemon (start|stop|status|run). Hooks use it for transformer embeddings and sub-100ms retrieval.')
+  .action(async (action = 'status') => {
+    if (action === 'run') { const { fileURLToPath } = await import('node:url'); execFileSync(process.execPath, ['--no-warnings', fileURLToPath(new URL('./daemon.js', import.meta.url))], { stdio: 'inherit' }); return; }
+    if (action === 'start') { if (daemonRunning()) { console.log('already running (pid ' + daemonRunning() + ')'); return; } ensureDaemon(); await new Promise((r) => setTimeout(r, 1500)); console.log(daemonRunning() ? `started (pid ${daemonRunning()}) on 127.0.0.1:${DAEMON_PORT}` : 'failed to start — see ~/.recall/daemon.log'); return; }
+    if (action === 'stop') { try { await daemonCall('/shutdown', {}, 2000); console.log('stopped'); } catch { const pid = daemonRunning(); if (pid) { process.kill(pid, 'SIGTERM'); console.log('sent SIGTERM'); } else console.log('not running'); } return; }
+    const pid = daemonRunning();
+    if (!pid) { console.log('not running'); return; }
+    try { const h = await new Promise<string>((res, rej) => { const req = httpGet({ host: '127.0.0.1', port: DAEMON_PORT, path: '/health' }, (r) => { let s = ''; r.on('data', (d) => (s += d)); r.on('end', () => res(s)); }); req.on('error', rej); }); console.log(h); } catch { console.log(`pid ${pid} alive but not answering on ${DAEMON_PORT}`); }
+  });
+
+program.command('reindex').description('Re-embed all entities with the current embedder (RECALL_EMBEDDER=transformer|hashing)').action(async () => {
+  try { const r = await daemonCall<{ reindexed: number; embedder: string }>('/reindex', {}, 600_000); console.log(JSON.stringify(r)); return; } catch { /* fall through */ }
+  const store = new Store(); const emb = pickEmbedder();
+  const n = await reindex(store, emb, (d, t) => process.stderr.write(`\r  ${d}/${t}`));
+  console.log(`\nreindexed ${n} entities with ${emb.name}`); store.close();
 });
 
 program.command('mcp').description('Run the MCP server (stdio)').action(() => {

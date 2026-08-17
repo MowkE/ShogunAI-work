@@ -42,6 +42,7 @@ export interface BaseEntity {
   /** Compact text used for lexical + vector search. */
   text: string;
   embedding?: number[];
+  embeddingModel?: string;
 }
 
 export interface Subject extends BaseEntity {

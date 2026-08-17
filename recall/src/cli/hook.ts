@@ -11,6 +11,23 @@ import { retrieve, formatContext, type Hit } from '../core/retrieve.js';
 import { ingest } from '../extract/ingest.js';
 import * as claudeCode from '../collectors/claude-code.js';
 import type { Entity } from '../core/schema.js';
+import { daemonCall, ensureDaemon } from './daemon.js';
+
+interface RetrieveResp { hits: { id: string; type: string; score: number; caveats: string[]; verified: boolean | null; entity: Entity }[]; context: string; latencyMs: number }
+
+/** Retrieve via the warm daemon (transformer embeddings); fall back to in-process lexical retrieval and kick the daemon. */
+async function retrieveSmart(store: Store, q: Parameters<typeof retrieve>[1], surface: string, maxChars?: number): Promise<{ ids: string[]; context: string; via: string }> {
+  try {
+    const r = await daemonCall<RetrieveResp>('/retrieve', { query: q, surface, maxChars, record: true }, 1500);
+    return { ids: r.hits.map((h) => h.id), context: r.context, via: 'daemon' };
+  } catch {
+    ensureDaemon();
+    const hits = retrieve(store, q);
+    const context = formatContext(hits, { maxChars });
+    if (hits.length) store.recordInjection({ sessionId: q.sessionId, surface, query: q.intent, entityIds: hits.map((h) => h.entity.id), cwd: q.cwd, latencyMs: 0 });
+    return { ids: hits.map((h) => h.entity.id), context, via: 'local' };
+  }
+}
 
 interface HookInput {
   session_id?: string; transcript_path?: string; cwd?: string; hook_event_name?: string; permission_mode?: string;
@@ -71,10 +88,10 @@ async function main() {
       case 'session-start': {
         // project brief: top rules + decisions for this cwd (no LLM)
         const cwd = input.cwd; if (!cwd) return;
-        const hits = retrieve(store, { intent: 'project conventions rules decisions overview', cwd, types: ['rule', 'decision'], topK: { rule: 6, decision: 3 }, projectOnly: true, minConfidence: { rule: 0.5, decision: 0.5 } });
-        if (!hits.length) return;
-        const ctx = formatContext(hits, { maxChars: 2200 }).replace('<recall-context ', '<recall-context kind="project-brief" ');
-        store.recordInjection({ sessionId: input.session_id, surface: 'hook:session-start', query: 'project-brief', entityIds: hits.map((h) => h.entity.id), cwd, latencyMs: Date.now() - t0 });
+        const r = await retrieveSmart(store, { intent: 'project conventions rules decisions overview', cwd, sessionId: input.session_id, types: ['rule', 'decision'], topK: { rule: 6, decision: 3 }, projectOnly: true, minConfidence: { rule: 0.5, decision: 0.5 } }, 'hook:session-start', 2200);
+        if (!r.ids.length) return;
+        const ctx = r.context.replace('<recall-context ', '<recall-context kind="project-brief" ');
+        log(`session-start: ${r.ids.length} via ${r.via} in ${Date.now() - t0}ms`);
         out({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx } });
         break;
       }
@@ -82,12 +99,10 @@ async function main() {
         const prompt = input.prompt ?? ''; const cwd = input.cwd;
         if (prompt.trim().length < 12 || /^(y|yes|n|no|ok|okay|continue|go|proceed|k|thanks)[.!]?$/i.test(prompt.trim())) return;
         const files = [...mentionedFiles(prompt), ...recentFiles(input.transcript_path, cwd)];
-        const hits = retrieve(store, { intent: prompt, cwd, files, sessionId: input.session_id });
-        if (!hits.length) { log(`prompt: no hits (${Date.now() - t0}ms)`); return; }
-        const ctx = formatContext(hits);
-        store.recordInjection({ sessionId: input.session_id, surface: 'hook:prompt', query: prompt, entityIds: hits.map((h) => h.entity.id), cwd, latencyMs: Date.now() - t0 });
-        log(`prompt: ${hits.length} hits in ${Date.now() - t0}ms`);
-        out({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: ctx } });
+        const r = await retrieveSmart(store, { intent: prompt, cwd, files, sessionId: input.session_id }, 'hook:prompt');
+        if (!r.ids.length) { log(`prompt: no hits via ${r.via} (${Date.now() - t0}ms)`); return; }
+        log(`prompt: ${r.ids.length} hits via ${r.via} in ${Date.now() - t0}ms`);
+        out({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: r.context } });
         break;
       }
       case 'guard': {
@@ -126,10 +141,12 @@ async function main() {
       case 'ingest': {
         const tp = input.transcript_path;
         if (!tp || !existsSync(tp)) return;
+        try { await daemonCall('/ingest', { paths: [tp] }, 1500); log('ingest(session-end): queued on daemon'); return; } catch { ensureDaemon(); }
         const ref = claudeCode.discover().find((r) => r.path === tp);
         if (!ref) return;
-        const r = await ingest(store, { paths: [ref.path], llm: null, force: false });
-        log(`ingest(session-end): ${JSON.stringify(r)}`);
+        const { hashingEmbedder } = await import('../core/embed.js');
+        const r = await ingest(store, { paths: [ref.path], llm: null, force: false, embedder: hashingEmbedder });
+        log(`ingest(session-end, local): ${JSON.stringify(r)}`);
         break;
       }
       default: return;

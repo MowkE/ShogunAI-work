@@ -4,15 +4,19 @@
 // Usage: node dist/eval/replay.js [--limit 300] [--project substr]
 
 import { Store } from '../core/store.js';
-import { retrieve } from '../core/retrieve.js';
+import { retrieve, retrieveAsync } from '../core/retrieve.js';
+import { pickEmbedder, hashingEmbedder } from '../core/embed.js';
 import type { Entity } from '../core/schema.js';
 
 const args = process.argv.slice(2);
 const opt = (k: string, d?: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const limit = Number(opt('--limit', '400'));
 const projectFilter = opt('--project');
+const mode = opt('--embed', 'transformer'); // transformer | hashing (lexical-only if entities are transformer-embedded)
+const embedder = mode === 'hashing' ? hashingEmbedder : pickEmbedder();
 
 const store = new Store();
+await new Promise((r) => setTimeout(r, 0));
 const segs = store.segmentsForEval(5000).filter((s) => (!projectFilter || s.project_path.includes(projectFilter)) && s.files_mutated !== '[]' && s.user_prompt.length > 20).slice(-limit);
 
 function pathsOf(e: Entity): string[] {
@@ -28,7 +32,7 @@ for (const s of segs) {
   if (!edited.size) continue;
   const t0 = Date.now();
   // Exclude entities whose provenance includes this very segment (no leakage): filter after retrieval
-  const hits = retrieve(store, { intent: s.user_prompt, cwd: s.project_path, types: ['pointer', 'subject', 'procedure'] })
+  const hits = (await retrieveAsync(store, { intent: s.user_prompt, cwd: s.project_path, types: ['pointer', 'subject', 'procedure'] }, embedder))
     .filter((h) => !h.entity.provenance.some((p) => p.segmentId === s.id));
   latency += Date.now() - t0;
   n++;
@@ -44,6 +48,7 @@ for (const s of segs) {
 }
 const pct = (x: number) => (n ? (100 * x / n).toFixed(1) + '%' : 'n/a');
 console.log(JSON.stringify({
+  embedder: embedder.name,
   segmentsEvaluated: n,
   hit_at_1: pct(hit1), hit_at_3: pct(hit3), hit_any: pct(hitAny),
   precision_mean: precN ? (precTotal / precN).toFixed(3) : 'n/a',
