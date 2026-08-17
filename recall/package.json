@@ -1,0 +1,29 @@
+{
+  "name": "recall",
+  "version": "0.1.0",
+  "description": "Local-first knowledge layer for coding agents: learns from your agent sessions, verifies against your repo, and injects context back — via Claude Code hooks, MCP, and compiled rules.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "recall": "dist/cli/index.js",
+    "recall-hook": "dist/cli/hook.js",
+    "recall-mcp": "dist/mcp/server.js"
+  },
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "npm run build && node --no-warnings --test dist/**/*.test.js",
+    "eval": "node --no-warnings dist/eval/replay.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "@modelcontextprotocol/sdk": "latest",
+    "commander": "^13.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js session-start",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js prompt",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js guard",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js observe",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js ingest",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

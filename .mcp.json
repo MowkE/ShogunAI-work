@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "recall": {
+      "type": "stdio",
+      "command": "/opt/homebrew/Cellar/node/25.3.0/bin/node",
+      "args": [
+        "--no-warnings",
+        "/Users/samahiththellakal/godhandsclone/recall/dist/mcp/server.js"
+      ]
+    }
+  }
+}

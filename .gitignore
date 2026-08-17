@@ -1,0 +1,5 @@
+node_modules/
+recall/dist/
+.recall/
+*.log
+.DS_Store
