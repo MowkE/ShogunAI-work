@@ -3,6 +3,7 @@ import { join, isAbsolute } from 'node:path';
 import type { Entity, EntityType } from './schema.js';
 import { Store } from './store.js';
 import { cosine, hashingEmbedder, type Embedder } from './embed.js';
+import { repoIdFor } from '../collectors/git.js';
 
 export interface Query {
   intent: string;
@@ -59,13 +60,14 @@ export function retrieve(store: Store, q: Query, opts: { qEmb?: number[]; embedd
   const qEmb = opts.qEmb ?? hashingEmbedder.embedSync(intent);
   const embName = opts.embedderName ?? hashingEmbedder.name;
   const fileHits = store.entitiesForPaths(q.files ?? []);
+  const repoId = repoIdFor(q.cwd);
 
   // Candidate pool: FTS (per type) ∪ file-index hits ∪ project entities (small KBs) — then score all
   const cand = new Map<string, Entity>();
   const bm25 = new Map<string, number>();
   for (const t of types) for (const r of store.ftsSearch(intent, 40, t)) { bm25.set(r.id, r.bm25); }
   for (const id of [...bm25.keys(), ...fileHits.keys()]) { const e = store.getEntity(id); if (e) cand.set(id, e); }
-  if (cand.size < 40) for (const e of store.allEntities({ projectPath: project })) if (types.includes(e.type)) cand.set(e.id, e);
+  if (cand.size < 40) for (const e of store.allEntities({ projectPath: project, repo: repoId })) if (types.includes(e.type)) cand.set(e.id, e);
 
   // normalize bm25 → 0..1 (bm25 in FTS5 is negative; more negative = better)
   const bmVals = [...bm25.values()]; const bmMin = Math.min(0, ...bmVals); // most negative
@@ -78,7 +80,7 @@ export function retrieve(store: Store, q: Query, opts: { qEmb?: number[]; embedd
     const minC = q.minConfidence?.[e.type] ?? DEFAULT_MIN_CONF[e.type] ?? 0;
     if (e.validity.confidence < minC) continue;
     const isGlobal = e.projectPath === '' || e.scope === 'personal';
-    const sameProject = isGlobal || e.projectPath === project || (!!project && !!e.projectPath && (project.startsWith(e.projectPath + '/') || e.projectPath.startsWith(project + '/')));
+    const sameProject = isGlobal || e.projectPath === project || (!!repoId && e.repo === repoId) || (!!project && !!e.projectPath && (project.startsWith(e.projectPath + '/') || e.projectPath.startsWith(project + '/')));
     if (!sameProject && (q.projectOnly || e.type === 'rule' || e.type === 'decision')) continue;
     const vec = e.embedding && (e.embeddingModel ?? 'hashing-v1') === embName ? Math.max(0, cosine(qEmb, e.embedding)) : 0;
     const lex = bmNorm(e.id);

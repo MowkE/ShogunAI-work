@@ -77,3 +77,19 @@ export function extractFromCommits(repo: string, commits: Commit[]): DraftEntity
   }
   return out;
 }
+
+const repoIdCache = new Map<string, string | undefined>();
+/** Stable repo identity for a directory (walks up to the git toplevel): "github.com/owner/name" or undefined. */
+export function repoIdFor(dir: string | undefined): string | undefined {
+  if (!dir) return undefined;
+  if (repoIdCache.has(dir)) return repoIdCache.get(dir);
+  let id: string | undefined;
+  try {
+    const top = execFileSync('git', ['-C', dir, 'rev-parse', '--show-toplevel'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const url = execFileSync('git', ['-C', top, 'remote', 'get-url', 'origin'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const m = url.match(/^(?:https?:\/\/|git@|ssh:\/\/git@)?([^/:]+)[:/](.+?)(?:\.git)?\/?$/);
+    id = m ? `${m[1]}/${m[2]}`.toLowerCase() : undefined;
+  } catch { id = undefined; }
+  repoIdCache.set(dir, id);
+  return id;
+}

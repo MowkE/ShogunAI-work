@@ -35,6 +35,8 @@ export interface BaseEntity {
   scope: Scope;
   sensitivity: Sensitivity;
   projectPath: string; // repo/cwd this entity is about ("" = global)
+  /** Machine-independent repo identity, e.g. github.com/owner/name (from the git remote). Used for team sync + cross-machine matching. */
+  repo?: string;
   provenance: Provenance[];
   validity: Validity;
   /** Paths this entity is anchored to (for the FileIndex). */

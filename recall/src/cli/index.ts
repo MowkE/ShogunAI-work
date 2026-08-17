@@ -18,6 +18,9 @@ import { daemonCall, daemonRunning, ensureDaemon, DAEMON_PORT } from './daemon.j
 import { pickEmbedder } from '../core/embed.js';
 import { reindex } from '../core/merge.js';
 import { retrieveAsync } from '../core/retrieve.js';
+import { startTeamServer } from '../team/server.js';
+import { loadConfig, saveConfig, suggestPromotions, promote, push as teamPush, pull as teamPull } from '../team/client.js';
+import { repoIdFor } from '../collectors/git.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distRoot = resolve(here, '..');
@@ -202,6 +205,34 @@ program.command('reindex').description('Re-embed all entities with the current e
   const store = new Store(); const emb = pickEmbedder();
   const n = await reindex(store, emb, (d, t) => process.stderr.write(`\r  ${d}/${t}`));
   console.log(`\nreindexed ${n} entities with ${emb.name}`); store.close();
+});
+
+// ---------------- team (alpha) ----------------
+program.command('team-server')
+  .description('Run a Recall Team Server (shared KB). Alpha: SQLite-backed, bearer-key auth.')
+  .option('--port <n>', 'port', '47900').option('--host <h>', 'bind host', '0.0.0.0')
+  .option('--db <path>', 'database file', join(process.env.HOME ?? '.', '.recall', 'team.db'))
+  .option('--keys <keys>', 'comma-separated API keys (or RECALL_TEAM_KEYS)', process.env.RECALL_TEAM_KEYS ?? '')
+  .action((o) => { startTeamServer({ port: Number(o.port), host: o.host, dbPath: o.db, keys: String(o.keys).split(',').map((k: string) => k.trim()).filter(Boolean) }); });
+
+const team = program.command('team').description('Team sync: login | status | suggest | push | pull');
+team.command('login <url> <key>').option('--author <name>', 'your name for provenance').action((url: string, key: string, o) => { const c = loadConfig(); c.team = { url, key, author: o.author }; saveConfig(c); console.log(`logged in to ${url}`); });
+team.command('status').action(async () => { const c = loadConfig(); if (!c.team) { console.log('not logged in'); return; } try { const r = await fetch(c.team.url.replace(/\/$/, '') + '/v1/health'); console.log(c.team.url, await r.text()); } catch (e) { console.log(`unreachable: ${(e as Error).message}`); } });
+team.command('suggest').description('List local entities worth promoting to the team KB').option('--project <path>', 'project root', process.cwd()).action((o) => {
+  const store = new Store(); const c = suggestPromotions(store, resolve(o.project)).slice(0, 25);
+  for (const e of c) console.log(`${e.id.slice(0, 8)}  ${e.type.padEnd(9)} ×${e.validity.evidence} ${Math.round(e.validity.confidence * 100)}%  ${e.text.slice(0, 100)}`);
+  if (!c.length) console.log('(no candidates yet — evidence ≥3, PR-derived, or confident rules/decisions qualify)'); store.close();
+});
+team.command('promote <ids...>').description('Mark entities as team scope and push them').action(async (ids: string[]) => {
+  const store = new Store(); const done: string[] = [];
+  for (const id of ids) { const e = promote(store, id); if (e) done.push(e.id); else console.error(`no entity ${id}`); }
+  if (done.length) { try { const r = await teamPush(store, done); console.log(`promoted ${done.length} → pushed ${r.pushed} (${r.inserted} new, ${r.merged} merged on server)`); } catch (e) { console.log(`promoted locally; push failed: ${(e as Error).message}`); } }
+  store.close();
+});
+team.command('push').description('Push all team-scope entities').action(async () => { const store = new Store(); console.log(JSON.stringify(await teamPush(store))); store.close(); });
+team.command('pull').description('Pull the team KB into your local store').option('--full', 'ignore last-pull cursor').option('--repo <id>', 'only entities for this repo id (default: current repo)').option('--all-repos', 'no repo filter').action(async (o) => {
+  const store = new Store(); const repo = o.allRepos ? undefined : (o.repo ?? repoIdFor(process.cwd()));
+  console.log(JSON.stringify(await teamPull(store, pickEmbedder(), { repo, full: !!o.full }))); store.close();
 });
 
 program.command('mcp').description('Run the MCP server (stdio)').action(() => {

@@ -128,10 +128,13 @@ export class Store {
     this.db.prepare('DELETE FROM file_index WHERE entity_id = ?').run(id);
   }
 
-  allEntities(filter: { type?: EntityType; projectPath?: string } = {}): Entity[] {
+  allEntities(filter: { type?: EntityType; projectPath?: string; scope?: string; updatedSince?: string; repo?: string } = {}): Entity[] {
     const where: string[] = []; const args: (string)[] = [];
     if (filter.type) { where.push('type = ?'); args.push(filter.type); }
-    if (filter.projectPath !== undefined) { where.push("(project_path = ? OR project_path = '')"); args.push(filter.projectPath); }
+    if (filter.projectPath !== undefined && filter.repo) { where.push("(project_path = ? OR project_path = '' OR json LIKE ?)"); args.push(filter.projectPath, `%"repo":${JSON.stringify(filter.repo)}%`); }
+    else if (filter.projectPath !== undefined) { where.push("(project_path = ? OR project_path = '')"); args.push(filter.projectPath); }
+    if (filter.scope) { where.push('scope = ?'); args.push(filter.scope); }
+    if (filter.updatedSince) { where.push('updated_at > ?'); args.push(filter.updatedSince); }
     const sql = `SELECT json, embedding FROM entities ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`;
     return (this.db.prepare(sql).all(...args) as { json: string; embedding: Uint8Array | null }[]).map(rowToEntity);
   }

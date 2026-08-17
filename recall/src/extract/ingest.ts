@@ -55,7 +55,8 @@ export async function ingest(store: Store, opts: IngestOptions = {}): Promise<In
     if (sess.events.length < 4) { store.setCursor(cursorKey, stamp); res.skipped++; continue; }
     const rep: RedactionReport = { replaced: {}, total: 0 };
     const events = redactDeep(sess.events, rep); res.redactions += rep.total;
-    const projectPath = sess.cwd ?? ref.projectPath;
+    // Never let an unknown project fall into '' (global scope): key it by session so it stays isolated.
+    const projectPath = (sess.cwd ?? ref.projectPath) || `unknown:${ref.collector}:${ref.sessionId.slice(0, 8)}`;
     const segs = segmentSession(ref.sessionId, projectPath, events);
     res.sessions++;
     log(`[${i}/${refs.length}] ${ref.sessionId.slice(0, 8)} ${projectPath.split('/').slice(-2).join('/')} → ${segs.length} segments`, i, refs.length);

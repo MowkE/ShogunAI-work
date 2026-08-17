@@ -33,12 +33,12 @@ Look at `node dist/cli/index.js search "onshape callouts recalibrate" --cwd ~/st
 
 | Gap | Where it lives | Plan ref |
 |---|---|---|
-| Cursor/Codex/Aider transcript collectors | `src/collectors/` | Page 5 — git + GitHub PR collectors are done (`recall ingest-repo`); PR→rule path is fixture-tested (this machine's repos are solo, so no live review comments yet) |
+| ~~Cursor/Codex collectors~~ done and verified on real local data (21 Cursor composers, 7 Codex rollouts); Gemini CLI/Aider/OpenCode remain | `src/collectors/` | git + GitHub PR collectors done; PR→rule path fixture-tested |
 | ~~Hashing embeddings~~ done: local `bge-small` via transformers.js, warm in the daemon; weights retuned (hit@3 40% → 52%) | `src/core/embed.ts` | — |
-| ~~No warm daemon~~ done: `recall daemon start|stop|status`, auto-started by hooks, watches transcripts | `src/cli/daemon.ts` | Node startup (~200 ms) is now the floor; a compiled hook binary is the next step |
+| ~~No warm daemon~~ done; ~~hook latency~~ done: compiled bun shim ≈40 ms via daemon `/hook` | `src/cli/daemon.ts`, `hookbin/` | — |
 | Guard never denies yet | `src/cli/hook.ts` `guard` | needs rules with `enforcement: 'block'` (team/promoted rules) |
 | Batches API for backfill | `src/extract/model.ts` | Page 6 |
-| Team server / sync / review queue / GitHub App | not started | Pages 9–10 |
+| Team server alpha done (SQLite + bearer keys; promote/push/pull; repo-id matching); review UI, Postgres/RLS, GitHub App doc-projection not started | `src/team/` | Pages 9–10 |
 | Correction detector is regex-based | `src/extract/segment.ts` `CORRECTION_RE` | LLM pass generalizes; a dedicated classifier is planned |
 
 ## Decisions made tonight (and why)
