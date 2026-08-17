@@ -57,7 +57,7 @@ Entity guidance:
 Never include secrets, credentials, or personal data. Placeholders like <SECRET:...> already replaced them; do not try to reconstruct them. Use repository-relative paths.`;
 
 function prov(seg: Segment, model: string, ids: string[]): Provenance {
-  return { source: seg.agent === 'claude-code' ? 'claude-code' : 'agent', sessionId: seg.sessionId, segmentId: seg.id, messageIds: ids.slice(0, 8), observedAt: seg.startedAt, extractor: 'llm', author: model } as Provenance;
+  return { source: (['claude-code', 'codex', 'cursor', 'gemini', 'aider', 'opencode'].includes(seg.agent) ? seg.agent : 'agent') as Provenance['source'], sessionId: seg.sessionId, segmentId: seg.id, messageIds: ids.slice(0, 8), observedAt: seg.startedAt, extractor: 'llm', author: model } as Provenance;
 }
 
 export async function llmExtract(seg: Segment, model: JsonModel): Promise<{ drafts: DraftEntity[]; costUsd: number; outcome: Segment['outcome'] }> {

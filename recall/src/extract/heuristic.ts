@@ -7,7 +7,7 @@ import { basename } from 'node:path';
 const IGNORE_PATH = /(^|\/)(node_modules|dist|build|\.git|\.next|coverage)(\/|$)|\/\.claude\/projects\/|^\/(private\/)?tmp\/|^\/var\/folders\/|\.(lock|png|jpg|jpeg|gif|svg|ico|pdf|zip|tgz|gz)$/i;
 
 function prov(seg: Segment, extra: Partial<Provenance> = {}): Provenance {
-  return { source: seg.agent === 'claude-code' ? 'claude-code' : 'agent', sessionId: seg.sessionId, segmentId: seg.id, observedAt: seg.startedAt, extractor: 'heuristic', ...extra } as Provenance;
+  return { source: (['claude-code', 'codex', 'cursor', 'gemini', 'aider', 'opencode'].includes(seg.agent) ? seg.agent : 'agent') as Provenance['source'], sessionId: seg.sessionId, segmentId: seg.id, observedAt: seg.startedAt, extractor: 'heuristic', ...extra } as Provenance;
 }
 
 export function heuristicExtract(seg: Segment): DraftEntity[] {

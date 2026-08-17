@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import { Store, defaultDbPath } from '../core/store.js';
 import { retrieve, formatContext, type Hit } from '../core/retrieve.js';
 import { ingest } from '../extract/ingest.js';
-import * as claudeCode from '../collectors/claude-code.js';
+import { discoverAll } from '../collectors/index.js';
 import type { Entity } from '../core/schema.js';
 import { daemonCall, ensureDaemon } from './daemon.js';
 
@@ -142,7 +142,7 @@ async function main() {
         const tp = input.transcript_path;
         if (!tp || !existsSync(tp)) return;
         try { await daemonCall('/ingest', { paths: [tp] }, 1500); log('ingest(session-end): queued on daemon'); return; } catch { ensureDaemon(); }
-        const ref = claudeCode.discover().find((r) => r.path === tp);
+        const ref = discoverAll(['claude-code']).find((r) => r.path === tp);
         if (!ref) return;
         const { hashingEmbedder } = await import('../core/embed.js');
         const r = await ingest(store, { paths: [ref.path], llm: null, force: false, embedder: hashingEmbedder });

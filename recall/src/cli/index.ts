@@ -11,6 +11,7 @@ import { compileRules } from '../core/compile.js';
 import { ingest, ingestRepo } from '../extract/ingest.js';
 import { pickModel, hasAnthropicCreds } from '../extract/model.js';
 import * as claudeCode from '../collectors/claude-code.js';
+import { discoverAll } from '../collectors/index.js';
 import { segmentsOf } from '../extract/ingest.js';
 import { renderSegment } from '../extract/segment.js';
 import { daemonCall, daemonRunning, ensureDaemon, DAEMON_PORT } from './daemon.js';
@@ -59,11 +60,12 @@ program.command('ingest')
   .option('--llm-segments <n>', 'max LLM segments this run', '25')
   .option('--max-cost <usd>', 'LLM spend cap', '5')
   .option('--force', 're-process even if already ingested')
+  .option('--collectors <ids...>', 'restrict to collectors: claude-code codex cursor')
   .action(async (o) => {
     const store = new Store();
     const model = o.llm ? await pickModel() : null;
     console.error(`model: ${model?.name ?? 'none'}${model && !hasAnthropicCreds() ? ' (claude -p; each call carries Claude Code overhead ~$0.10)' : ''}`);
-    const r = await ingest(store, { since: o.since ? Number(o.since) : undefined, project: o.project, session: o.session, max: o.max ? Number(o.max) : undefined, llm: model, maxLlmSegments: Number(o.llmSegments), maxCostUsd: Number(o.maxCost), force: !!o.force, onProgress: (m) => console.error('  ' + m) });
+    const r = await ingest(store, { since: o.since ? Number(o.since) : undefined, project: o.project, session: o.session, max: o.max ? Number(o.max) : undefined, llm: model, maxLlmSegments: Number(o.llmSegments), maxCostUsd: Number(o.maxCost), force: !!o.force, collectors: o.collectors, onProgress: (m) => console.error('  ' + m) });
     console.log(JSON.stringify(r, null, 2));
     store.close();
   });
@@ -165,7 +167,7 @@ program.command('inspect <session>')
   .description('Debug: show segments recall sees in a transcript (id prefix)')
   .option('--render', 'print the redacted rendering sent to the LLM')
   .action((session: string, o) => {
-    const ref = claudeCode.discover().find((r) => r.sessionId.startsWith(session));
+    const ref = discoverAll().find((r) => r.sessionId.startsWith(session));
     if (!ref) { console.error('no such session'); process.exit(1); }
     for (const s of segmentsOf(ref)) {
       console.log(`\n── ${s.id} · ${s.startedAt} · ${s.outcome} · ${s.events.length} events · edits ${s.filesMutated.length} · corrections ${s.corrections.length}\n   ${s.userPrompt.slice(0, 160).replace(/\n/g, ' ')}`);
@@ -174,8 +176,9 @@ program.command('inspect <session>')
   });
 
 program.command('doctor').description('Check environment').action(() => {
-  const refs = claudeCode.discover();
-  console.log(JSON.stringify({ node: process.version, db: defaultDbPath(), dbExists: Store.exists(), transcripts: refs.length, projects: new Set(refs.map((r) => r.projectPath)).size,
+  const refs = discoverAll();
+  const byCollector: Record<string, number> = {}; for (const r of refs) byCollector[r.collector] = (byCollector[r.collector] ?? 0) + 1;
+  console.log(JSON.stringify({ node: process.version, db: defaultDbPath(), dbExists: Store.exists(), transcripts: refs.length, byCollector, projects: new Set(refs.map((r) => r.projectPath).filter(Boolean)).size,
     anthropicCreds: hasAnthropicCreds(), claudeCli: which('claude'), modelAdapter: process.env.RECALL_MODEL_ADAPTER ?? 'auto', hookBin: HOOK_BIN }, null, 2));
 });
 

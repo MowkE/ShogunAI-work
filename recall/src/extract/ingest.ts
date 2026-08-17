@@ -3,7 +3,7 @@ import { Store } from '../core/store.js';
 import { redactDeep, type RedactionReport } from '../core/redact.js';
 import { mergeDrafts } from '../core/merge.js';
 import { type Embedder, pickEmbedder } from '../core/embed.js';
-import * as claudeCode from '../collectors/claude-code.js';
+import { discoverAll, readAny } from '../collectors/index.js';
 import { segmentSession } from './segment.js';
 import { heuristicExtract } from './heuristic.js';
 import { llmExtract } from './llm.js';
@@ -22,6 +22,7 @@ export interface IngestOptions {
   force?: boolean;            // re-ingest even if cursor says done
   paths?: string[];           // explicit transcript files (e.g. from a hook)
   embedder?: Embedder;        // defaults to pickEmbedder()
+  collectors?: string[];      // restrict to these collectors (default all)
 }
 
 export interface IngestResult {
@@ -32,9 +33,8 @@ export async function ingest(store: Store, opts: IngestOptions = {}): Promise<In
   const res: IngestResult = { sessions: 0, segments: 0, llmSegments: 0, inserted: 0, merged: 0, costUsd: 0, redactions: 0, skipped: 0 };
   const log = opts.onProgress ?? (() => {});
   const embedder = opts.embedder ?? pickEmbedder();
-  let refs: SourceRef[] = opts.paths?.length
-    ? opts.paths.map((p) => claudeCode.discover().find((r) => r.path === p)).filter((x): x is SourceRef => !!x)
-    : claudeCode.discover();
+  const all = discoverAll(opts.collectors);
+  let refs: SourceRef[] = opts.paths?.length ? all.filter((r) => opts.paths!.includes(r.path)) : all;
   if (opts.since) { const cutoff = Date.now() - opts.since * 86400000; refs = refs.filter((r) => r.mtimeMs >= cutoff); }
   if (opts.project) refs = refs.filter((r) => r.projectPath.includes(opts.project!));
   if (opts.session) refs = refs.filter((r) => r.sessionId.startsWith(opts.session!));
@@ -46,12 +46,12 @@ export async function ingest(store: Store, opts: IngestOptions = {}): Promise<In
   let i = 0;
   for (const ref of refs) {
     i++;
-    const cursorKey = `cc:${ref.sessionId}`;
+    const cursorKey = `${ref.collector === 'claude-code' ? 'cc' : ref.collector}:${ref.sessionId}`;
     const prev = store.getCursor(cursorKey);
     const stamp = `${ref.mtimeMs}:${ref.sizeBytes}`;
     const llmWanted = !!opts.llm && llmBudgetLeft();
     if (!opts.force && prev === stamp + (llmWanted ? '' : '') && !llmWanted) { res.skipped++; continue; }
-    let sess; try { sess = claudeCode.readSession(ref); } catch { res.skipped++; continue; }
+    let sess; try { sess = readAny(ref); } catch { res.skipped++; continue; }
     if (sess.events.length < 4) { store.setCursor(cursorKey, stamp); res.skipped++; continue; }
     const rep: RedactionReport = { replaced: {}, total: 0 };
     const events = redactDeep(sess.events, rep); res.redactions += rep.total;
@@ -87,7 +87,7 @@ export async function ingest(store: Store, opts: IngestOptions = {}): Promise<In
 }
 
 export function segmentsOf(ref: SourceRef): Segment[] {
-  const sess = claudeCode.readSession(ref);
+  const sess = readAny(ref);
   return segmentSession(ref.sessionId, sess.cwd ?? ref.projectPath, redactDeep(sess.events));
 }
 

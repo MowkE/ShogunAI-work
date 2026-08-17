@@ -16,6 +16,8 @@ import { pickEmbedder, type Embedder } from '../core/embed.js';
 import { reindex } from '../core/merge.js';
 import { ingest } from '../extract/ingest.js';
 import { claudeProjectsDir } from '../collectors/claude-code.js';
+import { codexDirs } from '../collectors/codex.js';
+import { cursorGlobalDb } from '../collectors/cursor.js';
 
 export const DAEMON_PORT = Number(process.env.RECALL_PORT ?? 47821);
 const DIR = join(homedir(), '.recall');
@@ -85,18 +87,14 @@ async function serve() {
   };
 
   // Watch transcripts (macOS/Windows support recursive fs.watch; Linux ≥ 20 too)
-  const dir = claudeProjectsDir();
-  if (existsSync(dir)) {
-    try {
-      watch(dir, { recursive: true }, (_ev, fname) => {
-        if (!fname || !String(fname).endsWith('.jsonl')) return;
-        pending.add(join(dir, String(fname)));
-        if (debounce) clearTimeout(debounce);
-        debounce = setTimeout(() => { const p = [...pending]; pending.clear(); void runIngest(p); }, 15_000); // sessions write continuously; ingest 15 s after the last write
-      });
-      log(`watching ${dir}`);
-    } catch (e) { log(`watch failed: ${(e as Error).message}`); }
+  const schedule = (path?: string, delay = 15_000) => { if (path) pending.add(path); if (debounce) clearTimeout(debounce); debounce = setTimeout(() => { const p = [...pending]; pending.clear(); void runIngest(p.length ? p : undefined); }, delay); };
+  for (const dir of [claudeProjectsDir(), ...codexDirs()]) {
+    if (!existsSync(dir)) continue;
+    try { watch(dir, { recursive: true }, (_ev, fname) => { if (fname && String(fname).endsWith('.jsonl')) schedule(join(dir, String(fname))); }); log(`watching ${dir}`); }
+    catch (e) { log(`watch failed ${dir}: ${(e as Error).message}`); }
   }
+  const cdb = cursorGlobalDb();
+  if (cdb) { try { watch(cdb, () => schedule(undefined, 60_000)); log(`watching ${cdb}`); } catch { /* ignore */ } }
 
   const json = (res: ServerResponse, code: number, body: unknown) => { const b = JSON.stringify(body); res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(b) }); res.end(b); };
   const readBody = (req: IncomingMessage) => new Promise<Record<string, unknown>>((resolve) => { let s = ''; req.on('data', (d) => (s += d)); req.on('end', () => { try { resolve(s ? JSON.parse(s) : {}); } catch { resolve({}); } }); });
