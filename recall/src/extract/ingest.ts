@@ -137,3 +137,35 @@ export async function ingestRepo(store: Store, repo: string, opts: { maxCommits?
   if (drafts.length) { const m = await mergeDrafts(store, drafts, embedder); res.inserted = m.inserted; res.merged = m.merged; }
   return res;
 }
+
+// ---------------- Claude Code auto-memory ----------------
+import { discoverMemory, extractFromMemory } from '../collectors/claude-memory.js';
+
+export async function ingestMemory(store: Store, opts: { embedder?: Embedder; force?: boolean } = {}): Promise<{ files: number; inserted: number; merged: number }> {
+  const embedder = opts.embedder ?? pickEmbedder();
+  const drafts: DraftEntity[] = []; let files = 0;
+  for (const f of discoverMemory()) {
+    const key = `mem:${f.path}`; const stamp = String(f.mtimeMs);
+    if (!opts.force && store.getCursor(key) === stamp) continue;
+    drafts.push(...extractFromMemory({ ...f, text: redact(f.text).text })); files++;
+    store.setCursor(key, stamp);
+  }
+  if (!drafts.length) return { files, inserted: 0, merged: 0 };
+  const m = await mergeDrafts(store, drafts, embedder);
+  return { files, inserted: m.inserted, merged: m.merged };
+}
+
+// ---------------- forget (privacy) ----------------
+export function forget(store: Store, sel: { entity?: string; session?: string; project?: string; all?: boolean }): { entities: number; segments: number } {
+  let ids: string[] = [];
+  if (sel.all) ids = store.allEntities().map((e) => e.id);
+  else if (sel.entity) ids = store.allEntities().filter((e) => e.id.startsWith(sel.entity!)).map((e) => e.id);
+  else if (sel.session) ids = store.allEntities().filter((e) => e.provenance.some((p) => p.sessionId?.startsWith(sel.session!))).map((e) => e.id);
+  else if (sel.project) ids = store.allEntities().filter((e) => e.projectPath.includes(sel.project!)).map((e) => e.id);
+  for (const id of ids) store.deleteEntity(id);
+  let segments = 0;
+  if (sel.all) { segments = (store.db.prepare('SELECT COUNT(*) n FROM segments').get() as { n: number }).n; store.db.exec('DELETE FROM segments; DELETE FROM ingest_cursor; DELETE FROM injections; DELETE FROM feedback;'); }
+  else if (sel.session) { segments = store.db.prepare('DELETE FROM segments WHERE session_id LIKE ?').run(sel.session + '%').changes as number; store.db.prepare("DELETE FROM ingest_cursor WHERE key LIKE ?").run('%' + sel.session + '%'); }
+  else if (sel.project) { segments = store.db.prepare('DELETE FROM segments WHERE project_path LIKE ?').run('%' + sel.project + '%').changes as number; }
+  return { entities: ids.length, segments };
+}

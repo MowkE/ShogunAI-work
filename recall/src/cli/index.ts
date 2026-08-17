@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -8,7 +8,7 @@ import { get as httpGet } from 'node:http';
 import { Store, defaultDbPath } from '../core/store.js';
 import { retrieve, formatContext } from '../core/retrieve.js';
 import { compileRules } from '../core/compile.js';
-import { ingest, ingestRepo } from '../extract/ingest.js';
+import { ingest, ingestRepo, ingestMemory, forget } from '../extract/ingest.js';
 import { pickModel, hasAnthropicCreds } from '../extract/model.js';
 import * as claudeCode from '../collectors/claude-code.js';
 import { discoverAll } from '../collectors/index.js';
@@ -21,6 +21,8 @@ import { retrieveAsync } from '../core/retrieve.js';
 import { startTeamServer } from '../team/server.js';
 import { loadConfig, saveConfig, suggestPromotions, promote, push as teamPush, pull as teamPull } from '../team/client.js';
 import { repoIdFor } from '../collectors/git.js';
+import { analyzeDrift, changedFromGit, changedFromPR, renderReport } from '../drift/index.js';
+import { writeFileSync as writeFileSyncFs } from 'node:fs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distRoot = resolve(here, '..');
@@ -47,7 +49,9 @@ program.command('init')
     console.error(`recall init · db ${store.path} · model ${model?.name ?? 'none (heuristic only)'}`);
     const r = await ingest(store, { since: Number(o.since), llm: model, maxLlmSegments: Number(o.llmSegments), maxCostUsd: Number(o.maxCost), onProgress: (m) => console.error('  ' + m) });
     console.error(`\ningested ${r.sessions} sessions → ${r.segments} segments (${r.llmSegments} LLM-refined, $${r.costUsd.toFixed(2)}) · ${r.inserted} new / ${r.merged} merged entities · ${r.redactions} secrets redacted`);
+    try { const m = await ingestMemory(store); if (m.files) console.error(`auto-memory: ${m.files} files → ${m.inserted} new / ${m.merged} merged`); } catch { /* optional */ }
     const proj = resolve(o.project);
+    if (existsSync(join(proj, '.git'))) { try { const g = await ingestRepo(store, proj, { onProgress: (m) => console.error('  git: ' + m) }); console.error(`git history: ${g.commits} commits, ${g.prs} PRs → ${g.inserted} new entities`); } catch { /* optional */ } }
     installHooks(proj, !!o.user);
     installMcp(proj, !!o.user);
     const c = compileRules(store, proj);
@@ -94,6 +98,26 @@ program.command('ingest-repo [repos...]')
     for (const r of repos) { const res = await ingestRepo(store, resolve(r), { maxCommits: Number(o.maxCommits), maxPrs: Number(o.maxPrs), prs: o.prs, force: !!o.force, embedder, onProgress: (m) => console.error(`  ${r.split('/').pop()}: ${m}`) }); out.push(res); }
     console.log(JSON.stringify(out, null, 2)); store.close();
   });
+
+program.command('ingest-memory').description("Ingest Claude Code auto-memory files (~/.claude/projects/*/memory/*.md)").option('--force').action(async (o) => {
+  const store = new Store(); console.log(JSON.stringify(await ingestMemory(store, { force: !!o.force }))); store.close();
+});
+
+program.command('forget')
+  .description('Delete knowledge: --entity <id> | --session <id> | --project <substr> | --all  (also tombstones nothing on the team server yet — run `recall team push` after promoting replacements)')
+  .option('--entity <id>').option('--session <id>').option('--project <substr>').option('--all', 'wipe the local KB').option('--yes', 'skip confirmation for --all')
+  .action((o) => {
+    if (o.all && !o.yes) { console.error('refusing to wipe without --yes'); process.exit(1); }
+    const store = new Store(); const r = forget(store, { entity: o.entity, session: o.session, project: o.project, all: !!o.all }); console.log(JSON.stringify(r)); store.close();
+  });
+
+program.command('rule <id> <enforcement>').description('Set a rule\'s enforcement: inform | warn | block (warn/block make the PreToolUse guard act on it)').action((id: string, enforcement: string) => {
+  const store = new Store(); const e = store.allEntities({ type: 'rule' }).find((x) => x.id.startsWith(id));
+  if (!e || e.type !== 'rule') { console.error('no such rule'); process.exit(1); }
+  if (!['inform', 'warn', 'block'].includes(enforcement)) { console.error('enforcement must be inform|warn|block'); process.exit(1); }
+  e.enforcement = enforcement as 'inform' | 'warn' | 'block'; if (enforcement !== 'inform') { e.validity.confidence = Math.max(e.validity.confidence, 0.85); e.validity.evidence = Math.max(e.validity.evidence, 2); }
+  store.upsertEntity(e); console.log(`${e.id} → ${enforcement}`); store.close();
+});
 
 program.command('search <query...>')
   .description('Query the KB as an agent would')
@@ -234,6 +258,51 @@ team.command('pull').description('Pull the team KB into your local store').optio
   const store = new Store(); const repo = o.allRepos ? undefined : (o.repo ?? repoIdFor(process.cwd()));
   console.log(JSON.stringify(await teamPull(store, pickEmbedder(), { repo, full: !!o.full }))); store.close();
 });
+
+// ---------------- doc drift ----------------
+program.command('drift')
+  .description('Check whether docs still match changed code: stale paths/symbols, undocumented exports, sections to review (+ LLM consistency check with --llm)')
+  .option('--repo <path>', 'repository root', process.cwd())
+  .option('--base <ref>', 'compare base...HEAD (default: HEAD~1)')
+  .option('--staged', 'use staged changes')
+  .option('--pr <n>', 'use the files of a GitHub PR (via gh)')
+  .option('--llm', 'ask the model to check touched sections for concrete contradictions')
+  .option('--max-llm <n>', 'max sections to LLM-check', '8')
+  .option('--json', 'JSON output')
+  .option('--comment', 'post the report as a PR comment (requires --pr)')
+  .option('--out <file>', 'write markdown report to a file')
+  .action(async (o) => {
+    const root = resolve(o.repo);
+    const changed = o.pr ? changedFromPR(root, Number(o.pr)) : changedFromGit(root, { base: o.base, staged: !!o.staged });
+    if (!changed.length) { console.error('no changed files found (check --base/--staged/--pr)'); }
+    const model = o.llm ? await pickModel() : null;
+    const r = await analyzeDrift(root, changed, { model, maxLlm: Number(o.maxLlm), onProgress: (m) => console.error('  ' + m) });
+    const md = renderReport(r, { title: o.pr ? `Recall doc-drift report for PR #${o.pr}` : undefined });
+    if (o.json) console.log(JSON.stringify({ ...r, changedSymbols: r.changedSymbols.map((s) => `${s.file}:${s.name}`) }, null, 2)); else console.log(md);
+    if (o.out) writeFileSyncFs(o.out, md + '\n');
+    if (o.comment && o.pr) { try { execFileSync('gh', ['pr', 'comment', String(o.pr), '--body', md], { cwd: root, stdio: 'pipe' }); console.error(`posted comment on PR #${o.pr}`); } catch (e) { console.error('failed to post comment: ' + (e as Error).message.slice(0, 200)); } }
+  });
+
+program.command('adr').description('Draft ADR files (docs/adr/NNNN-slug.md) from Decision entities of this repo that have not been exported yet')
+  .option('--repo <path>', 'repository root', process.cwd()).option('--dir <path>', 'ADR directory', 'docs/adr').option('--min-confidence <x>', 'minimum decision confidence', '0.55')
+  .action((o) => {
+    const root = resolve(o.repo); const store = new Store();
+    const decisions = store.allEntities({ type: 'decision', projectPath: root, repo: repoIdFor(root) }).filter((e) => e.type === 'decision' && e.validity.confidence >= Number(o.minConfidence) && !e.provenance.some((p) => p.docPath?.includes('/adr/')));
+    if (!decisions.length) { console.log('no new decisions to export'); store.close(); return; }
+    const dir = join(root, o.dir); mkdirSync(dir, { recursive: true });
+    const existing = existsSync(dir) ? readdirSyncSafe(dir).filter((f) => /^\d{4}-/.test(f)).length : 0;
+    let n = existing; const written: string[] = [];
+    for (const d of decisions) {
+      if (d.type !== 'decision') continue;
+      n++; const slug = d.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+      const file = join(dir, `${String(n).padStart(4, '0')}-${slug}.md`);
+      const prov = d.provenance.map((p) => p.prNumber ? `PR #${p.prNumber}` : p.commit ? `commit ${p.commit.slice(0, 8)}` : p.sessionId ? `session ${p.sessionId.slice(0, 8)}` : p.source).join(', ');
+      writeFileSyncFs(file, `# ${d.title}\n\n- Status: ${d.status}\n- Date: ${d.validity.firstSeen.slice(0, 10)}\n- Source: ${prov} (Recall ${d.id.slice(0, 8)}, confidence ${Math.round(d.validity.confidence * 100)}%)\n\n## Context\n\n${d.context || '_(not captured)_'}\n\n## Decision\n\n${d.choice}\n\n## Alternatives considered\n\n${d.alternatives.length ? d.alternatives.map((a) => '- ' + a).join('\n') : '_(none recorded)_'}\n\n## Consequences\n\n${d.consequences.length ? d.consequences.map((c) => '- ' + c).join('\n') : '_(none recorded)_'}\n`);
+      d.provenance.push({ source: 'doc', docPath: file.replace(root + '/', ''), observedAt: new Date().toISOString() }); store.upsertEntity(d); written.push(file.replace(root + '/', ''));
+    }
+    console.log(JSON.stringify({ written }, null, 2)); store.close();
+  });
+function readdirSyncSafe(d: string): string[] { try { return readdirSync(d); } catch { return []; } }
 
 program.command('mcp').description('Run the MCP server (stdio)').action(() => {
   execFileSync(process.execPath, MCP_BIN_ARGS, { stdio: 'inherit' });
