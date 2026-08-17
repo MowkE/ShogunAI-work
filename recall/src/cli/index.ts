@@ -21,7 +21,10 @@ import { retrieveAsync } from '../core/retrieve.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const distRoot = resolve(here, '..');
-const HOOK_BIN = process.env.RECALL_HOOK_BIN ?? `node --no-warnings ${join(distRoot, 'cli', 'hook.js')}`;
+const NODE_HOOK = join(distRoot, 'cli', 'hook.js');
+const SHIM = resolve(distRoot, '..', 'hookbin', 'recall-hook');
+// Prefer the compiled bun shim (≈40 ms end-to-end via the daemon); it execs the Node hook when the daemon is down.
+const HOOK_BIN = process.env.RECALL_HOOK_BIN ?? (existsSync(SHIM) ? `RECALL_HOOK_FALLBACK=${JSON.stringify(NODE_HOOK)} ${JSON.stringify(SHIM)}` : `node --no-warnings ${JSON.stringify(NODE_HOOK)}`);
 const MCP_BIN_ARGS = ['--no-warnings', join(distRoot, 'mcp', 'server.js')];
 
 const program = new Command();
@@ -46,8 +49,9 @@ program.command('init')
     installMcp(proj, !!o.user);
     const c = compileRules(store, proj);
     console.error(`compiled ${c.rules} rules / ${c.decisions} decisions → ${c.written.map((f) => f.replace(proj + '/', '')).join(', ') || '(nothing to write yet)'}`);
-    console.error(`\nDone. Start a new Claude Code session in ${proj} — context is injected automatically. Try: recall search "how does X work"`);
     store.close();
+    ensureDaemon(); console.error('daemon started (warm embeddings, transcript watcher)');
+    console.error(`\nDone. Start a new Claude Code session in ${proj} — context is injected automatically. Try: recall search "how does X work"`);
   });
 
 program.command('ingest')
@@ -226,7 +230,7 @@ export function installHooks(project: string, user: boolean) {
   const hooks = (s.hooks as Record<string, unknown[]> | undefined) ?? {};
   for (const [ev, entries] of Object.entries(hookEntries())) {
     const existing = (hooks[ev] ?? []) as { hooks?: { command?: string }[] }[];
-    const kept = existing.filter((h) => !(h.hooks ?? []).some((x) => (x.command ?? '').includes('recall-hook') || (x.command ?? '').includes('cli/hook.js')));
+    const kept = existing.filter((h) => !(h.hooks ?? []).some((x) => (x.command ?? '').includes('recall-hook') || (x.command ?? '').includes('cli/hook.js') || (x.command ?? '').includes('hookbin/recall-hook')));
     hooks[ev] = [...kept, ...entries];
   }
   s.hooks = hooks;
@@ -240,7 +244,7 @@ export function uninstallHooks(project: string, user: boolean) {
   if (!existsSync(p)) return;
   const s = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, unknown>;
   const hooks = (s.hooks as Record<string, { hooks?: { command?: string }[] }[]> | undefined) ?? {};
-  for (const ev of Object.keys(hooks)) hooks[ev] = hooks[ev].filter((h) => !(h.hooks ?? []).some((x) => (x.command ?? '').includes('recall-hook') || (x.command ?? '').includes('cli/hook.js')));
+  for (const ev of Object.keys(hooks)) hooks[ev] = hooks[ev].filter((h) => !(h.hooks ?? []).some((x) => (x.command ?? '').includes('recall-hook') || (x.command ?? '').includes('cli/hook.js') || (x.command ?? '').includes('hookbin/recall-hook')));
   writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
 }
 

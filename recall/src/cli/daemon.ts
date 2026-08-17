@@ -16,6 +16,7 @@ import { pickEmbedder, type Embedder } from '../core/embed.js';
 import { reindex } from '../core/merge.js';
 import { ingest } from '../extract/ingest.js';
 import { claudeProjectsDir } from '../collectors/claude-code.js';
+import { handleHook, type HookInput } from './hook-logic.js';
 import { codexDirs } from '../collectors/codex.js';
 import { cursorGlobalDb } from '../collectors/cursor.js';
 
@@ -112,6 +113,11 @@ async function serve() {
           const ctx = formatContext(hits, { maxChars: (body.maxChars as number) ?? 3500 });
           if (body.record !== false) store.recordInjection({ sessionId: q.sessionId, surface: (body.surface as string) ?? 'daemon', query: q.intent, entityIds: hits.map((h) => h.entity.id), cwd: q.cwd, latencyMs: Date.now() - t });
           return json(res, 200, { hits: hits.map(serializeHit), context: ctx, latencyMs: Date.now() - t });
+        }
+        case '/hook': {
+          const out = await handleHook(store, embedder, String(body.event ?? ''), (body.input ?? {}) as HookInput, { onIngest: (paths) => { void runIngest(paths); } });
+          log(`hook ${body.event}: ${out ? 'context' : 'silent'} in ${Date.now() - t}ms`);
+          return json(res, 200, out ?? {});
         }
         case '/feedback': { store.recordFeedback(String(body.entityId), String(body.signal), body.sessionId as string | undefined, body.note as string | undefined); return json(res, 200, { ok: true }); }
         case '/ingest': { void runIngest(body.paths as string[] | undefined); return json(res, 202, { queued: true }); }

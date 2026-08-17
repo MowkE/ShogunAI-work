@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js session-start",
+            "command": "RECALL_HOOK_FALLBACK=\"/Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js\" \"/Users/samahiththellakal/godhandsclone/recall/hookbin/recall-hook\" session-start",
             "timeout": 10
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js prompt",
+            "command": "RECALL_HOOK_FALLBACK=\"/Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js\" \"/Users/samahiththellakal/godhandsclone/recall/hookbin/recall-hook\" prompt",
             "timeout": 10
           }
         ]
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js guard",
+            "command": "RECALL_HOOK_FALLBACK=\"/Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js\" \"/Users/samahiththellakal/godhandsclone/recall/hookbin/recall-hook\" guard",
             "timeout": 10
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js observe",
+            "command": "RECALL_HOOK_FALLBACK=\"/Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js\" \"/Users/samahiththellakal/godhandsclone/recall/hookbin/recall-hook\" observe",
             "timeout": 10
           }
         ]
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node --no-warnings /Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js ingest",
+            "command": "RECALL_HOOK_FALLBACK=\"/Users/samahiththellakal/godhandsclone/recall/dist/cli/hook.js\" \"/Users/samahiththellakal/godhandsclone/recall/hookbin/recall-hook\" ingest",
             "timeout": 60
           }
         ]

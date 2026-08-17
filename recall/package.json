@@ -13,7 +13,8 @@
     "node": ">=22.5"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:hook --silent",
+    "build:hook": "command -v bun >/dev/null 2>&1 && bun build --compile hookbin/recall-hook.ts --outfile hookbin/recall-hook >/dev/null 2>&1 || echo '(bun not found; hooks will use the Node fallback)'",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "npm run build && node --no-warnings --test dist/**/*.test.js",
     "eval": "node --no-warnings dist/eval/replay.js"
